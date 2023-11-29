@@ -25,6 +25,19 @@ namespace ncz {
     }
 }
 
+// TODO: figure out how to do backtraces sighhhh
+// Array<void*> backtrace {};
+// backtrace.count = CaptureStackBackTrace(0, 65535, backtrace.data, nullptr);
+// log(backtrace);
+// char buf[256];
+// FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+//                NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), 
+//                buf, (sizeof(buf) / sizeof(wchar_t)), NULL);
+// auto str = String { buf, strlen(buf) };
+// if (str[str.count-1] == '\n') str.count -= 1;
+// log(str);
+// exit(0);
+
 static const int FACTOR        = 400;
 static const int SCREEN_WIDTH  = 4 * FACTOR;
 static const int SCREEN_HEIGHT = 3 * FACTOR;
@@ -60,7 +73,8 @@ void hello_world() {
 
 void command_line(Array<cstr> args) {
     using namespace ncz;
-    LOG_ZONE("command line");
+    context.logger.labels.push("command line");
+    NCZ_DEFER(context.logger.labels.pop());
     
     auto& ls = context.logger.labels;
     ls.push("loops");
@@ -89,9 +103,9 @@ int main(int argc, cstr* argv) {
     rl::SetTraceLogCallback(ncz::raylib_trace_log_adapter);
     rl::SetTargetFPS(144);
     rl::InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "BREAKOUT :D");    
-    hello_world();
-    return 69;
-    // breakout();
+    // hello_world();
+    // return 69;
+    breakout();
     
     // Array         <type> ();
     // Dynamic_Array <type> (allocator);
@@ -108,23 +122,23 @@ int main(int argc, cstr* argv) {
     // Slab_Heap  <>         (align);
     // Fixed_Heap <capacity> (align);
     
-    ncz::Bucket_Array <int> funny {};
-    // ncz::Slab_Array   <int> epic  {};
     // ncz::Bucket_Array <int> funny {};
-    for (int i = 0; i <= 256; ++i) {
-        auto& epic = funny[funny.get()];
-        epic = i;
-        log("lol ", epic);
-    }
+    // // ncz::Slab_Array   <int> epic  {};
+    // // ncz::Bucket_Array <int> funny {};
+    // for (int i = 0; i <= 256; ++i) {
+    //     auto& epic = funny[funny.get()];
+    //     epic = i;
+    //     log("lol ", epic);
+    // }
     
-    log(funny.count);
-    log(funny.all_buckets.count);
+    // log(funny.count);
+    // log(funny.all_buckets.count);
     
-    return 69;
-    for (auto it : funny) { 
-        log("WOWOWOWO A ", it);
-    }
+    // return 69;
+    // for (auto it : funny) { 
+    //     log("WOWOWOWO A ", it);
+    // }
     
-    rl::CloseTheWindow();
-    return 0;
+    // rl::CloseTheWindow();
+    // return 0;
 }

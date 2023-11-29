@@ -36,3 +36,4 @@ tools/visual_studio/.vs
 tools/visual_studio/bin
 tools/visual_studio/tmp
 build/
+build.exe.old

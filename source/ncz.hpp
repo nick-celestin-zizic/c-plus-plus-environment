@@ -31,16 +31,18 @@
 #define NCZ_HPP_
 
 // Basic Types
-typedef const char*    cstr;
-typedef int8_t    s8;
-typedef uint8_t   u8;
-typedef int16_t   s16;
-typedef uint16_t  u16;
-typedef int32_t   s32;
-typedef uint32_t  u32;
-typedef int64_t   s64;
-typedef uint64_t  u64;
-typedef uintptr_t usize;
+typedef const char* cstr;
+typedef float       f32;
+typedef double      f64;
+typedef int8_t      s8;
+typedef uint8_t     u8;
+typedef int16_t     s16;
+typedef uint16_t    u16;
+typedef int32_t     s32;
+typedef uint32_t    u32;
+typedef int64_t     s64;
+typedef uint64_t    u64;
+typedef uintptr_t   usize;
 
 // TODO: our own assert
 #include <assert.h>
@@ -56,12 +58,23 @@ typedef uintptr_t usize;
 
 #pragma region FunkyMacros
 #define TEMP ::ncz::Allocator { ::ncz::pool_allocator_proc, &::ncz::context.temporary_storage }
-#define CONCAT_1(x, y) x##y
-#define CONCAT(x, y)  CONCAT_1(x, y)
-#define GENSYM(x)     CONCAT(x, __COUNTER__)
+#define NCZ_CONCAT_1(x, y) x##y
+#define NCZ_CONCAT(x, y)  NCZ_CONCAT_1(x, y)
+#define NCZ_GENSYM(x)     NCZ_CONCAT(x, __COUNTER__)
+#define NCZ_DEFER(code) ::ncz::Defer NCZ_GENSYM(_defer_) {[&](){code;}}
 
-#define DEFER(code) ::ncz::Defer GENSYM(_defer_) {[&](){code;}}
-#define LOG_ZONE(name) ::ncz::context.logger.labels.push(name); DEFER(::ncz::context.logger.labels.pop())
+// stolen nob Go Rebuild Urself™ Technology
+// from: https://github.com/tsoding/musializer/blob/master/src/nob.h#L260
+#ifndef NCZ_BUILD_CPP_EXE
+#if defined(__GNUC__)
+#define NCZ_BUILD_CPP_EXE(binary_path, source_path) "g++", "-std=c++17", "-o", binary_path, source_path
+#elif defined(__clang__)
+#define NCZ_BUILD_CPP_EXE(binary_path, source_path) "clang", "-std=c++17", "-o", binary_path, source_path
+#elif defined(_MSC_VER)
+#define NCZ_BUILD_CPP_EXE(binary_path, source_path) "clang-cl", "/std:c++17", source_path
+#endif
+#endif // NCZ_BUILD_CPP_EXE
+
 #pragma endregion
 
 namespace ncz {
@@ -91,8 +104,12 @@ namespace ncz {
     void* allocate(usize size, Allocator allocator);
     void* resize(void* memory, usize size, usize old_size, Allocator allocator);
     void  dispose(void* memory, Allocator allocator);
-    template <typename T> T* allocate(Allocator allocator) { return (T*)allocate(sizeof(T), allocator); }
     template <typename T> T* allocate(usize num = 1, Allocator allocator = {}) { return (T*)allocate(sizeof(T) * num, allocator); }
+    template <typename T> T* make(Allocator allocator) {
+        auto mem = (T*)allocate(sizeof(T), allocator);
+        *mem     = T();
+        return mem;
+    }
 
     // Page Allocator
     struct Page {
@@ -102,12 +119,14 @@ namespace ncz {
     
     Page _os_get_page(u64 size);
     void _os_del_page(Page page);
+    // Page _os_reserve_page(Page page);
+    // Page _os_commit_page(Page page, u64 extra);
     
 #ifdef DEVELOPER
-    Page logged_os_get_page(Source_Location loc, u64 size);
-    void logged_os_del_page(Source_Location loc, Page page);
-    #define os_get_page(...) ::ncz::logged_os_get_page(::ncz::Source_Location {__FILE__, __LINE__}, __VA_ARGS__)
-    #define os_del_page(...) ::ncz::logged_os_del_page(::ncz::Source_Location {__FILE__, __LINE__}, __VA_ARGS__)
+    Page traced_os_get_page(Source_Location loc, u64 size);
+    void traced_os_del_page(Source_Location loc, Page page);
+    #define os_get_page(...) ::ncz::traced_os_get_page(::ncz::Source_Location {__FILE__, __LINE__}, __VA_ARGS__)
+    #define os_del_page(...) ::ncz::traced_os_del_page(::ncz::Source_Location {__FILE__, __LINE__}, __VA_ARGS__)
 #else
     #define os_get_page ::ncz::_os_get_page
     #define os_del_page ::ncz::_os_del_page
@@ -187,11 +206,11 @@ namespace ncz {
     String from_cstr(cstr s);
     
     template <typename T, usize capacity>
-    struct Fixed_Array {
+    struct Fixed_List {
         usize count = 0;
         T data[capacity];
         
-        void push(T item) { assert(capacity > count);  data[count++] = item; }
+        T* push(T item) { assert(capacity > count);  data[count++] = item; return data+count-1; }
         T pop() { assert(count > 0); return data[--count]; }
         const Array<T> as_array() const { return { static_cast<T*>(data), count }; }
         Array<T> as_array() { return { static_cast<T*>(data), count }; }
@@ -226,7 +245,7 @@ namespace ncz {
     struct Logger {
         Logger_Proc proc;
         void* data;
-        Fixed_Array<cstr, NCZ_NUM_LOG_LABELS> labels;
+        Fixed_List<cstr, NCZ_NUM_LOG_LABELS> labels;
     };
     
     // C Runtime Logger
@@ -287,7 +306,7 @@ namespace ncz {
     
     template <usize CAPACITY>
     struct Fixed_Pool {
-         Fixed_Array<u8, CAPACITY> data = {};
+         Fixed_List<u8, CAPACITY> data = {};
          void* get(usize num_bytes) {
             assert(data.count + num_bytes <= CAPACITY);
             void* mem = &data.data[data.count];
@@ -297,7 +316,7 @@ namespace ncz {
          void reset() { data.count = 0; }
          
          static void* allocator_proc(Allocator_Mode mode, usize size, usize old_size, void* old_memory, void* allocator_data) {
-                auto pool = (Fixed_Pool<CAPACITY>*)allocator_data;
+                auto pool = static_cast<Fixed_Pool<CAPACITY>*>(allocator_data);
                 assert(pool != nullptr);
                 switch (mode) {
                 case Allocator_Mode::ALLOCATE: return pool->get(size);
@@ -308,14 +327,12 @@ namespace ncz {
                     return new_memory;
                 }
                 }
+                
+                assert(false && "unreachable");
+                return nullptr;
          }
          
-         Allocator allocator() {
-            return {
-                allocator_proc,
-                static_cast<void*>(this)
-            };
-         }
+         Allocator allocator() { return { allocator_proc, static_cast<void*>(this) }; }
     };
     
 #pragma endregion
@@ -330,10 +347,9 @@ namespace ncz {
     
     extern thread_local Context context;
     
-    // Dynamic Array Types
+    // Dynamic Data Structures
     
     template <typename T>
-    
     struct List : Array<T> {
         usize     capacity;
         Allocator allocator;
@@ -365,9 +381,9 @@ namespace ncz {
         template <typename ... Ts>
         void append(Ts ... args) { (push(args), ...); }
         void append(Array<T> ts) {
-            while (count + ts.count < capacity) expand();
-            memcpy(data+count, ts.data, ts.count+sizeof(T));
-            count += ts.count;
+            while (this->count + ts.count < capacity) expand();
+            memcpy(this->data+this->count, ts.data, ts.count+sizeof(T));
+            this->count += ts.count;
         }
     };
     
@@ -428,7 +444,7 @@ namespace ncz {
             assert(unfull_buckets.allocator.proc);
             assert(unfull_buckets.count == 0);
             
-            auto new_bucket = allocate<Bucket>(all_buckets.allocator);
+            auto new_bucket = allocate<Bucket>(1, all_buckets.allocator);
             memset(new_bucket, 0, sizeof(Bucket));
             new_bucket->bucket_index = static_cast<u32>(all_buckets.count);
             
@@ -477,7 +493,6 @@ namespace ncz {
                      bucket->count      += 1;
                      count += 1;
                      if (bucket->count >= ITEMS_PER_BUCKET) {
-                        log("BUCKET FULL");
                         usize removed = unfull_buckets.unordered_remove_by_value(bucket);
                         assert(removed == 1);
                      }
@@ -620,12 +635,11 @@ namespace ncz {
     void format(String_Builder* sb, String str);
     void format(String_Builder* sb, String_Builder str);
 
-    // Map Types
     u64 hash(Array<u8> bytes);
     template <typename T> Array<u8> as_bytes(T* data) { return { (u8*) data, sizeof(T) }; }
     template <typename T> u64 hash(T t) { return hash(as_bytes(&t)); }
     template <typename Key, typename Value>
-    struct Map {
+    struct Table {
         struct Bucket { Key key; Value value; bool occupied; };
         Bucket* buckets     = nullptr;
         usize count         = 0;
@@ -642,7 +656,7 @@ namespace ncz {
                 memset(buckets, 0, INITIAL_CAPACITY*sizeof(Bucket));
                 capacity = INITIAL_CAPACITY;
             } else {
-                Map<Key, Value> new_map {
+                Table<Key, Value> new_map {
                     allocate<Bucket>(capacity * 2, allocator),
                     0, capacity * 2, allocator
                 };
@@ -691,10 +705,8 @@ namespace ncz {
         }
     };
     
-    // god i hate c++
-        
     struct Unmapping_Allocator {
-        Map<void*, u64> pages;
+        Table<void*, u64> pages;
         // Mutex lock;
     };
     
@@ -744,7 +756,7 @@ namespace ncz {
     }
 
     template <typename Key, typename Value>
-    void format(String_Builder* sb, Map<Key, Value> map) {
+    void format(String_Builder* sb, Table<Key, Value> map) {
         sb->push('{');
         bool f = true;
         for (auto* it = map.buckets; it != map.buckets + map.capacity; ++it) {
@@ -773,37 +785,56 @@ namespace ncz {
 #pragma region Logging
     // Logging
     
-    template <typename ...Types>
-    void log(Types... args) {
+    // template <typename ...Types>
+    // void log(Types... args) {
+    //     auto mark = context.temporary_storage.mark;
+    //         String_Builder sb {};
+    //         sb.allocator = TEMP;
+    //         for (cstr label : context.logger.labels) {
+    //             sb.push('[');
+    //             format(&sb, label);
+    //             sb.append("] "_str);
+    //         }
+    //         (format(&sb, args), ...);
+    //         sb.append("\n\0"_str); // when in Rome...
+    //         context.logger.proc({sb.data, sb.count - 1}, Log_Level::NORMAL, Log_Type::INFO, context.logger.data);
+    //     context.temporary_storage.mark = mark;
+    // }
+    
+    #define log(...)       log_ex(Log_Level::NORMAL,  Log_Type::INFO, __VA_ARGS__)
+    #define log_info(...)  log_ex(Log_Level::VERBOSE, Log_Type::INFO, __VA_ARGS__)
+    #define log_error(...) log_ex(Log_Level::NORMAL,  Log_Type::ERRO, __VA_ARGS__)
+    #define log_warn(...)  log_ex(Log_Level::WARN,    Log_Type::ERRO, __VA_ARGS__)
+    
+    #define trace_info(...)  TODO
+    #define trace_error(...) TODO
+    #define trace_warn(...)  TODO
+    
+    #define show(expr) TODO_VERBOSE_INFO_AND_STRINGIFY
+    
+    // #define TEMP ::ncz::context.temporary_storage
+    
+    #if 0
+    #ifdef DEVELOPER
+    #define assert(cond, ...) \
+        if (!(cond)) (trace_error("Assertion `" STRINGIFY(cond) "` Failed: "_str, __VA_ARGS__), NCZ_FAILED_ASSERTION_HANDLER())
+    #else
+    #define assert(...)
+    #endif
+    #endif
+    
+    template <typename ...Args>
+    void log_ex(Log_Level level, Log_Type type, Args... args) {
         auto mark = context.temporary_storage.mark;
             String_Builder sb {};
             sb.allocator = TEMP;
             for (cstr label : context.logger.labels) {
                 sb.push('[');
                 format(&sb, label);
-                sb.push(']');
-                sb.push(' ');
+                sb.append(']', ' ');
             }
             (format(&sb, args), ...);
-            sb.push('\n');
-            sb.push('\0'); // when in Rome...
-            context.logger.proc({sb.data, sb.count - 1}, Log_Level::NORMAL, Log_Type::INFO, context.logger.data);
-        context.temporary_storage.mark = mark;
-    }
-    template <typename ...Types>
-    void log_ex(Log_Level level, Log_Type type, Types... args) {
-        auto mark = context.temporary_storage.mark;
-            String_Builder sb {};
-            sb.allocator = TEMP;
-            for (cstr label : context.logger.labels) {
-                sb.push('[');
-                format(&sb, label);
-                sb.push(']');
-                sb.push(' ');
-            }
-            (format(&sb, args), ...);
-            sb.push('\n');
-            sb.push('\0'); // when in Rome...
+            sb.append('\n', '\0'); // when in Rome...
             context.logger.proc({sb.data, sb.count - 1}, level, type, context.logger.data);
         context.temporary_storage.mark = mark;
     }
@@ -836,6 +867,13 @@ bool run_cmd(Args ... args) {
     return ok;
 }
 
+#pragma endregion
+#pragma region FileSystem
+#define NCZ_PLATFORM_WIN32 1
+#define NCZ_PLATFORM_POSIX 2
+
+#ifndef NCZ_PLATFORM
+#define NCZ_PLATFORM NCZ_PLATFORM_WIN32
 #pragma endregion
 #pragma region Misc
     // Utililty Templates
@@ -940,8 +978,8 @@ namespace ncz {
     Allocator get_unmapping_allocator() {
         Flat_Pool bootstrap_pool(32 * 1024 * 1024);
         auto bootstrap_allocator = bootstrap_pool.allocator();
-        auto unmapping_allocator = allocate<Unmapping_Allocator>(bootstrap_allocator);
-        auto pool               = allocate<Flat_Pool>(bootstrap_allocator);
+        auto unmapping_allocator = allocate<Unmapping_Allocator>(1, bootstrap_allocator);
+        auto pool                = allocate<Flat_Pool>(1, bootstrap_allocator);
         *pool = bootstrap_pool;
         unmapping_allocator->pages = {};
         unmapping_allocator->pages.allocator = {flat_pool_allocator_proc, pool};
@@ -972,12 +1010,7 @@ namespace ncz {
     }
     
     
-    Allocator Pool::allocator() {
-        return {
-            pool_allocator_proc,
-            static_cast<void*>(this)
-        };
-    }
+    Allocator Pool::allocator() { return { pool_allocator_proc, static_cast<void*>(this) }; }
     
     
     void* Pool::get(usize bytes) {
@@ -1053,13 +1086,13 @@ namespace ncz {
     static constexpr u64 align(u64 n, u64 a) { return (n + a-1) & ~(a-1); }
 
 #ifdef DEVELOPER
-    Page logged_os_get_page(Source_Location loc, u64 size) {
+    Page traced_os_get_page(Source_Location loc, u64 size) {
         Page page = _os_get_page(size);
         log_ex(Log_Level::TRACE, Log_Type::INFO, loc,
                " Mapped "_str, page.size/1024, "Kb of virtual memory ("_str, page.memory, ")."_str);
         return page;
     }
-    void logged_os_del_page(Source_Location loc, Page page) {
+    void traced_os_del_page(Source_Location loc, Page page) {
         _os_del_page(page);
         log_ex(Log_Level::TRACE, Log_Type::INFO, loc,
             " Unmapped  "_str, page.size/1024, "Kb of virtual memory ("_str, page.memory, ")."_str);
@@ -1222,7 +1255,6 @@ namespace ncz {
     
 #ifdef _WIN32
     bool wait(Process proc) {
-        
         if (!proc) return false;
         DWORD result = WaitForSingleObject(proc, INFINITE);
         
@@ -1271,22 +1303,15 @@ namespace ncz {
                 return false;
             }
         }
-    
         return true;
     }
-#else
-bool wait(Process proc) {
-    assert(false && "TODO: #define NO_MULTIWHATVER");
-    return false;
-}
 #endif
 
     
 #ifdef _WIN32
     Process run_command_async(Array<cstr> args) {
+        // https://docs.microsoft.com/en-us/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output
         
-         // https://docs.microsoft.com/en-us/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output
-    
         STARTUPINFO siStartInfo;
         ZeroMemory(&siStartInfo, sizeof(siStartInfo));
         siStartInfo.cb = sizeof(STARTUPINFO);
@@ -1297,7 +1322,7 @@ bool wait(Process proc) {
         siStartInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
         siStartInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
-    
+        
         PROCESS_INFORMATION piProcInfo;
         ZeroMemory(&piProcInfo, sizeof(PROCESS_INFORMATION));
         
@@ -1314,27 +1339,27 @@ bool wait(Process proc) {
                 }
             }
             sb.push(0);
-            log(sb.data);
+            log_info(sb.data);
             BOOL bSuccess = CreateProcessA(NULL, sb.data, NULL, NULL, TRUE, 0, NULL, NULL, &siStartInfo, &piProcInfo);
         context.temporary_storage.mark = mark;
-    
+        
         if (!bSuccess) {
             // TODO: log_error
-            log("Could not create child process: ", (u64) GetLastError());
+            log_error("Could not create child process: ", (u64) GetLastError());
             return 0;
         }
-    
+        
         CloseHandle(piProcInfo.hThread);
         return piProcInfo.hProcess;
     }
 #else
     Process run_command_async(Array<cstr> args) {
-     pid_t cpid = fork();
+        pid_t cpid = fork();
         if (cpid < 0) {
             log_ex(Log_Level::NORMAL, Log_Type::ERRO,  "Could not fork child process: ", strerror(errno));
             return 0;
         }
-    
+        
         if (cpid == 0) {
             List<cstr> cmd {};
             String_Builder sb {};
@@ -1352,15 +1377,14 @@ bool wait(Process proc) {
             }
             cmd.push(nullptr);
             
-            log(sb.data);
-    
+            log_info(sb.data);
+        
             if (execvp(cmd.data[0], (char * const*) cmd.data) < 0) {
                 log_ex(Log_Level::NORMAL, Log_Type::ERRO,  "Could not exec child process: ", strerror(errno));
                 exit(1);
             }
             assert(0 && "unreachable");
         }
-    
         return cpid;
     }
 #endif
@@ -1380,7 +1404,12 @@ bool wait(Process proc) {
     }
 
     // Format Implementations
-    void format(String_Builder* sb, Source_Location loc) { format(sb, loc.file); sb->push(':'); format(sb, loc.line); }
+    void format(String_Builder* sb, Source_Location loc) {
+        format(sb, loc.file);
+        sb->push(':');
+        format(sb, loc.line);
+    }
+    
     void format(String_Builder* sb, cstr s) {
         auto len = strlen(s);
         while (sb->capacity < sb->count + len) sb->expand();
@@ -1400,7 +1429,8 @@ bool wait(Process proc) {
         sb->count += len;
     }
     
-    void format(String_Builder* sb, float f) {
+    void format(String_Builder* sb, f64 f) { format(sb, static_cast<f32>(f)); }
+    void format(String_Builder* sb, f32 f) {
         constexpr const auto MAX_LEN = 32;
         char buf[MAX_LEN];
         auto len = snprintf(buf, MAX_LEN, "%f", f);
@@ -1410,83 +1440,28 @@ bool wait(Process proc) {
         memcpy(sb->data + sb->count, buf, len);
         sb->count += len;
     }
-    void format(String_Builder* sb, double f) {
-        format(sb, (float)f);
-    }
-    void format(String_Builder* sb, u8 c) {
-        constexpr const auto MAX_LEN = 32;
-        char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIu8, c);
-        assert(len > 0);
-        while (sb->capacity < sb->count + len) sb->expand();
-        assert(sb->capacity >= sb->count + len);
-        memcpy(sb->data + sb->count, buf, len);
-        sb->count += len;
-    }
-    void format(String_Builder* sb, s8 c) {
-        constexpr const auto MAX_LEN = 32;
-        char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIi8, c);
-        assert(len > 0);
-        while (sb->capacity < sb->count + len) sb->expand();
-        assert(sb->capacity >= sb->count + len);
-        memcpy(sb->data + sb->count, buf, len);
-        sb->count += len;
-    }
-    void format(String_Builder* sb, u16 x) {
-        constexpr const auto MAX_LEN = 32;
-        char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIu16, x);
-        assert(len > 0);
-        while (sb->capacity < sb->count + len) sb->expand();
-        assert(sb->capacity >= sb->count + len);
-        memcpy(sb->data + sb->count, buf, len);
-        sb->count += len;
-    }
-    void format(String_Builder* sb, s16 x) {
-        constexpr const auto MAX_LEN = 32;
-        char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIi16, x);
-        assert(len > 0);
-        while (sb->capacity < sb->count + len) sb->expand();
-        assert(sb->capacity >= sb->count + len);
-        memcpy(sb->data + sb->count, buf, len);
-        sb->count += len;
-    }
-    void format(String_Builder* sb, u32 x) {
-        constexpr const auto MAX_LEN = 32;
-        char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIu32, x);
-        assert(len > 0);
-        while (sb->capacity < sb->count + len) sb->expand();
-        assert(sb->capacity >= sb->count + len);
-        memcpy(sb->data + sb->count, buf, len);
-        sb->count += len;
-    }
-    void format(String_Builder* sb, s32 x) {
-        constexpr const auto MAX_LEN = 32;
-        char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIi32, x);
-        assert(len > 0);
-        while (sb->capacity < sb->count + len) sb->expand();
-        assert(sb->capacity >= sb->count + len);
-        memcpy(sb->data + sb->count, buf, len);
-        sb->count += len;
-    }
+    
+    void format(String_Builder* sb, u8  x) { format(sb, static_cast<u64>(x)); }
+    void format(String_Builder* sb, u16 x) { format(sb, static_cast<u64>(x)); }
+    void format(String_Builder* sb, u32 x) { format(sb, static_cast<u64>(x)); }
     void format(String_Builder* sb, u64 x) {
         constexpr const auto MAX_LEN = 32;
         char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIu64, x);
+        auto len = snprintf(buf, MAX_LEN, "%lu", x);
         assert(len > 0);
         while (sb->capacity < sb->count + len) sb->expand();
         assert(sb->capacity >= sb->count + len);
         memcpy(sb->data + sb->count, buf, len);
         sb->count += len;
     }
+    
+    void format(String_Builder* sb, s8  x) { format(sb, static_cast<s64>(x)); }
+    void format(String_Builder* sb, s16 x) { format(sb, static_cast<s64>(x)); }
+    void format(String_Builder* sb, s32 x) { format(sb, static_cast<s64>(x)); }
     void format(String_Builder* sb, s64 x) {
         constexpr const auto MAX_LEN = 32;
         char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%" PRIi64, x);
+        auto len = snprintf(buf, MAX_LEN, "%l", x);
         assert(len > 0);
         while (sb->capacity < sb->count + len) sb->expand();
         assert(sb->capacity >= sb->count + len);
@@ -1495,3 +1470,5 @@ bool wait(Process proc) {
     }
 }
 #endif // NCZ_IMPLEMENTATION
+
+#endif 

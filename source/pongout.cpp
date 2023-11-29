@@ -10,6 +10,7 @@ struct Target {
 struct Ball {
     Vec2 pos; // this is stored in cartesian form
     Vec2 vel; // this is stored in polar form
+    bool dead;
     float radius;
 };
 
@@ -36,7 +37,7 @@ void handle_collision(Ball* b, Rect rect) {
 
 #define DEG_TO_RAD (PI/180.0f)
 void breakout() {
-    Bucket_Array<Ball> balls   {};
+    static Fixed_List<Ball, 1000000> balls   {};
     List<Target>       targets {};
     // Slab_Array<Target> targets {};
     
@@ -51,10 +52,10 @@ void breakout() {
     for (usize i = 0; i < 1000; ++i) {
         auto angle  = static_cast<float>(rl::GetRandomValue(0, 360) * DEG_TO_RAD);
         auto offset = from_polar(angle, static_cast<float>(rl::GetRandomValue(0, 100)));
-        Ball& b     = balls[balls.get()];
-        b.radius    = 25;
-        b.pos       = { SCREEN_WIDTH/2 + offset.x, SCREEN_HEIGHT/2 + offset.y };
-        b.vel       = from_polar(static_cast<float>(rl::GetRandomValue(BALL_SPEED/2, BALL_SPEED*2)), angle);
+        Ball* b     = balls.push({}); // balls[balls.get()];
+        b->radius   = 25;
+        b->pos      = { SCREEN_WIDTH/2 + offset.x, SCREEN_HEIGHT/2 + offset.y };
+        b->vel      = from_polar(static_cast<float>(rl::GetRandomValue(BALL_SPEED/2, BALL_SPEED*2)), angle);
     }
     
     float hue_angle = 0;
@@ -65,6 +66,8 @@ void breakout() {
         
         for (auto it = balls.begin(); it != balls.end(); ++it) {
             auto& b = *it;
+            if (b.dead) continue;
+            
             b.pos.x += b.vel.x * dt;
             b.pos.y += b.vel.y * dt;
             
@@ -72,14 +75,14 @@ void breakout() {
             handle_collision(&b, right_player);
             
             if (b.pos.y <= b.radius || b.pos.y >= h - b.radius) b.vel.y *= -1;
-            if (b.pos.x <= b.radius || b.pos.x >= w - b.radius) balls.del(it.index);
+            if (b.pos.x <= b.radius || b.pos.x >= w - b.radius) b.dead   = true;
         }
         
         hue_angle  = fmodf(hue_angle + 60.0f * dt, 360.0f);
         auto color = rl::ColorFromHSV(hue_angle, 1, .75);
         rl::BeginDrawing();
             rl::ClearBackground(rl::BLACK);
-            for (auto b : balls) rl::DrawCircleV(b.pos, b.radius, color);
+            for (auto b : balls)   if (!b.dead)   rl::DrawCircleV(b.pos, b.radius, color);
             for (auto t : targets) if (!t.broken) rl::DrawRectangleRec(t.rect, color);
             rl::DrawRectangleRec(left_player, color);
             rl::DrawRectangleRec(right_player, color);
