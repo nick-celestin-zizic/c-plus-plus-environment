@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -9,23 +8,6 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <math.h>
-
-#ifdef _WIN32
-#    define WIN32_LEAN_AND_MEAN
-#    include <windows.h>
-#    include <direct.h>
-#    include <shellapi.h>
-#    pragma comment(lib, "shell32.lib")
-#    pragma comment(lib, "user32.lib")
-#    pragma comment(lib, "winmm.lib")
-#    pragma comment(lib, "gdi32.lib")
-#else
-#    include <sys/types.h>
-#    include <sys/wait.h>
-#    include <sys/stat.h>
-#    include <unistd.h>
-#    include <fcntl.h>
-#endif
 
 #ifndef NCZ_HPP_
 #define NCZ_HPP_
@@ -44,8 +26,9 @@ typedef int64_t     s64;
 typedef uint64_t    u64;
 typedef uintptr_t   usize;
 
-// TODO: our own assert
-#include <assert.h>
+#define NCZ_ASSERTION_HANDLER exit(1)
+
+#define assert(cond) if (!(cond)) { ::ncz::log_stack_trace(); NCZ_ASSERTION_HANDLER; }
 
 #pragma region ModuleParameters
 #ifndef NCZ_PAGE_SIZE
@@ -57,23 +40,28 @@ typedef uintptr_t   usize;
 #pragma endregion
 
 #pragma region FunkyMacros
-#define TEMP ::ncz::Allocator { ::ncz::pool_allocator_proc, &::ncz::context.temporary_storage }
+#define NCZ_TEMP ::ncz::Allocator { ::ncz::pool_allocator_proc, &::ncz::context.temporary_storage }
 #define NCZ_CONCAT_1(x, y) x##y
 #define NCZ_CONCAT(x, y)  NCZ_CONCAT_1(x, y)
 #define NCZ_GENSYM(x)     NCZ_CONCAT(x, __COUNTER__)
 #define NCZ_DEFER(code) ::ncz::Defer NCZ_GENSYM(_defer_) {[&](){code;}}
+#define NCZ_HERE ::ncz::Source_Location {__FILE__, __LINE__}
 
 // stolen nob Go Rebuild Urself™ Technology
 // from: https://github.com/tsoding/musializer/blob/master/src/nob.h#L260
-#ifndef NCZ_BUILD_CPP_EXE
+#ifndef NCZ_CC
 #if defined(__GNUC__)
-#define NCZ_BUILD_CPP_EXE(binary_path, source_path) "g++", "-std=c++17", "-o", binary_path, source_path
-#elif defined(__clang__)
-#define NCZ_BUILD_CPP_EXE(binary_path, source_path) "clang", "-std=c++17", "-o", binary_path, source_path
+#define NCZ_CC(binary_path, source_path) "g++", "-g", "-std=c++17", "-o", binary_path, source_path
 #elif defined(_MSC_VER)
-#define NCZ_BUILD_CPP_EXE(binary_path, source_path) "clang-cl", "/std:c++17", source_path
+#pragma comment(lib, "dbghelp.lib")
+#define NCZ_CC(binary_path, source_path) "cl", "/Zi", "/std:c++17", source_path
+#elif defined(__clang__)
+#define NCZ_CC(binary_path, source_path) "clang", "-g", "-std=c++17", "-o", binary_path, source_path
 #endif
-#endif // NCZ_BUILD_CPP_EXE
+#endif // NCZ_CC
+
+#define NCZ_CPP_FILE_IS_SCRIPT(argc, argv) \
+    maybe_reload_cpp_script({(argv), static_cast<usize>((argc))}, __FILE__)
 
 #pragma endregion
 
@@ -730,7 +718,7 @@ namespace ncz {
     }
     template <typename ... Args>
     String tprint(Args ... args) {
-        String_Builder sb(TEMP);
+        String_Builder sb(NCZ_TEMP);
         (format(&sb, args), ...);
         sb.push('\0'); // when in Rome...
         return { sb.data, sb.count-1 };
@@ -789,7 +777,7 @@ namespace ncz {
     // void log(Types... args) {
     //     auto mark = context.temporary_storage.mark;
     //         String_Builder sb {};
-    //         sb.allocator = TEMP;
+    //         sb.allocator = NCZ_TEMP;
     //         for (cstr label : context.logger.labels) {
     //             sb.push('[');
     //             format(&sb, label);
@@ -812,7 +800,7 @@ namespace ncz {
     
     #define show(expr) TODO_VERBOSE_INFO_AND_STRINGIFY
     
-    // #define TEMP ::ncz::context.temporary_storage
+    // #define NCZ_TEMP ::ncz::context.temporary_storage
     
     #if 0
     #ifdef DEVELOPER
@@ -827,7 +815,7 @@ namespace ncz {
     void log_ex(Log_Level level, Log_Type type, Args... args) {
         auto mark = context.temporary_storage.mark;
             String_Builder sb {};
-            sb.allocator = TEMP;
+            sb.allocator = NCZ_TEMP;
             for (cstr label : context.logger.labels) {
                 sb.push('[');
                 format(&sb, label);
@@ -842,14 +830,17 @@ namespace ncz {
 #pragma endregion
 #pragma region Multiprocessing
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 typedef HANDLE Process;
 #else
 typedef int Process;
 #endif // _WIN32
 
 bool wait(Process proc);
-Process run_command_async(Array<cstr> args);
-bool run_command_sync(Array<cstr> args);
+bool wait(Array<Process> proc);
+Process run_command_async(Array<cstr> args, bool trace = true);
+bool run_command_sync(Array<cstr> args, bool trace = true);
 
 // runs a system command, the arguments should be a variable number
 // of null terminated c strings, but c++ varargs do not have the
@@ -860,7 +851,7 @@ bool run_command_sync(Array<cstr> args);
 template <typename ... Args>
 bool run_cmd(Args ... args) {
     auto mark = context.temporary_storage.mark;
-    List<cstr> cmd(TEMP);
+    List<cstr> cmd(NCZ_TEMP);
     (cmd.push(args), ...);
     bool ok = run_command_sync(cmd);
     context.temporary_storage.mark = mark;
@@ -869,11 +860,9 @@ bool run_cmd(Args ... args) {
 
 #pragma endregion
 #pragma region FileSystem
-#define NCZ_PLATFORM_WIN32 1
-#define NCZ_PLATFORM_POSIX 2
-
-#ifndef NCZ_PLATFORM
-#define NCZ_PLATFORM NCZ_PLATFORM_WIN32
+bool needs_update(String output_path, Array<String> input_paths);
+bool needs_update(String output_path, String input_paths);
+bool rename_file(String old_path, String new_path);
 #pragma endregion
 #pragma region Misc
     // Utililty Templates
@@ -888,12 +877,31 @@ bool run_cmd(Args ... args) {
         else if (t > max) return max;
         else              return t;
     }
+    template <usize limit>
+    Fixed_Pool<limit>* use_global_arena() {
+        static Fixed_Pool<limit> global_arena {};
+        auto allocator    = global_arena.allocator();
+        context.allocator = allocator;
+        context.temporary_storage.block_allocator = allocator;
+        return &global_arena;
+    }
+    void maybe_reload_cpp_script(Array<cstr> args, cstr src);
+    String to_string(cstr c);
+    void log_stack_trace();
 #pragma endregion
 }
 #endif // NCZ_HPP_
 
 #ifdef NCZ_IMPLEMENTATION
+static constexpr u64 align(u64 n, u64 a) { return (n + a-1) & ~(a-1); }
 namespace ncz {
+
+#ifdef _WIN32
+#include "ncz_win32.cpp"
+#else
+#include "ncz_posix.cpp"
+#endif
+
     thread_local Context context {};
     
     String::String()
@@ -908,6 +916,29 @@ namespace ncz {
             return lhs;
         }
         return {};
+    }
+    
+    String to_string(cstr c) {
+        return String { (char*)c, strlen(c) };
+    }
+    
+    bool needs_update(String output_path, String input_paths) {
+        return needs_update(output_path, { &input_paths, 1 });
+    }
+    
+    void maybe_reload_cpp_script(Array<cstr> args, cstr src) {
+        auto bin_str = to_string(args[0]);
+        auto src_str = to_string(src);
+        if (needs_update(bin_str, src_str)) {
+            auto old = tprint(bin_str, ".old");
+            if (!rename_file(bin_str, old)) exit(1);
+            if (!run_cmd(NCZ_CC(args[0], src))) {
+                rename_file(old, bin_str);
+                exit(1);
+            }
+            if (!run_command_sync(args)) exit(1);
+            exit(0);
+        }
     }
     
     // Memory Management
@@ -1083,7 +1114,6 @@ namespace ncz {
     }
 
     // Flat Pool Allocator
-    static constexpr u64 align(u64 n, u64 a) { return (n + a-1) & ~(a-1); }
 
 #ifdef DEVELOPER
     Page traced_os_get_page(Source_Location loc, u64 size) {
@@ -1099,58 +1129,7 @@ namespace ncz {
     }
 #endif
 
-#if defined(_WIN32)
-    Page _os_get_page(u64 size) {
-        u64 s   = align(size, NCZ_PAGE_SIZE);
-        void* p = VirtualAlloc(nullptr, static_cast<size_t>(s), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        assert(p);
-        return {p, s};
-    }
 
-    void _os_del_page(Page page) {
-        if (!page.memory) return;
-        VirtualFree(page.memory, 0, MEM_RELEASE);
-    }
-
-    u8* os_reserve_pages(u64 reserve) {
-        assert(reserve == align(reserve, NCZ_PAGE_SIZE));
-        auto p = (u8*) VirtualAlloc(nullptr, static_cast<size_t>(reserve), MEM_RESERVE, PAGE_READWRITE);
-        assert(p);
-        return p;
-    }
-
-    u8* os_extend_commited_pages(u8* first_uncommitted_page, u8* end) {
-        u64 delta = (u64) (end - first_uncommitted_page);
-        assert(delta >= 0);
-        u64 size = align(delta, NCZ_PAGE_SIZE);
-        VirtualAlloc(first_uncommitted_page, static_cast<size_t>(size), MEM_COMMIT, PAGE_READWRITE);
-        return first_uncommitted_page + size;
-    }
-#else
-    #include <sys/mman.h>
-    Page _os_get_page(u64 size) {
-        u64 s   = align(size, NCZ_PAGE_SIZE);
-        void* p = mmap(nullptr, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
-        assert(p);
-        return {p, s};
-    }
-    void _os_del_page(Page page) {
-        if (!page.memory) return;
-        munmap(page.memory, page.size);
-    }
-    u8* os_reserve_pages(u64 reserve) {
-        assert(reserve == align(reserve, NCZ_PAGE_SIZE));
-        void* p = mmap(nullptr, reserve, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
-        assert(p);
-        return (u8*) p;
-    }
-    u8* os_extend_commited_pages(u8* first_uncommitted_page, u8* end) {
-        u64 delta = (u64) (end - first_uncommitted_page);
-        assert(delta >= 0);
-        u64 size = align(delta, NCZ_PAGE_SIZE);
-        return first_uncommitted_page + size;
-    }
-#endif
     Flat_Pool::Flat_Pool(u64 reserve_size) {
         reserve_size           = align(reserve_size, NCZ_PAGE_SIZE);
         memory_base            = os_reserve_pages(reserve_size);
@@ -1190,54 +1169,6 @@ namespace ncz {
         return nullptr;
     }
     
-    // C Runtime Logger
-    #ifdef _WIN32
-    void crt_logger_proc(String message, Log_Level level, Log_Type type, void* logger_data) {
-        (void) logger_data;
-        (void) level;
-        
-        auto handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        switch (type) {
-        case Log_Type::INFO:
-            fwrite(message.data, 1, message.count, stdout);
-            break;
-        case Log_Type::ERRO:
-            SetConsoleTextAttribute(handle, 0x0004);
-            fwrite(message.data, 1, message.count, stdout);
-            SetConsoleTextAttribute(handle, 0x0004 | 0x0002 | 0x0001);
-            break;
-        case Log_Type::WARN:
-            SetConsoleTextAttribute(handle, 0x0004 | 0x0002);
-            fwrite(message.data, 1, message.count, stdout);
-            SetConsoleTextAttribute(handle, 0x0004 | 0x0002 | 0x0001);
-            break;
-        }
-    }
-    #else
-    
-    void crt_logger_proc(String message, Log_Level level, Log_Type type, void* logger_data) {
-        (void) logger_data;
-        (void) level;
-        
-        #define ANSI_COLOR_RED     "\x1b[31m"
-        #define ANSI_COLOR_YELLOW  "\x1b[33m"
-        #define ANSI_COLOR_RESET   "\x1b[0m"
-    
-        auto sink = type == Log_Type::ERRO ? stderr : stdout;
-        switch (type) {
-        case Log_Type::INFO:
-            fwrite(message.data, 1, message.count, sink);
-            break;
-        case Log_Type::ERRO:
-            fprintf(sink, ANSI_COLOR_RED "%s" ANSI_COLOR_RESET, message.data);
-            break;
-        case Log_Type::WARN:
-            fprintf(sink, ANSI_COLOR_YELLOW "%s" ANSI_COLOR_RESET, message.data);
-            break;
-        }
-    }
-    #endif
-    
     String operator ""_str(cstr data, usize count) { return { (char*) data, count }; }
     String from_cstr(cstr s) { 
         String str;
@@ -1247,148 +1178,21 @@ namespace ncz {
     }
     
     // Multiprocessing
-    bool run_command_sync(Array<cstr> args) {
-        auto proc = run_command_async(args);
+    bool run_command_sync(Array<cstr> args, bool trace) {
+        auto proc = run_command_async(args, trace);
         if (!proc) return false;
         return wait(proc);
     }
     
-#ifdef _WIN32
-    bool wait(Process proc) {
-        if (!proc) return false;
-        DWORD result = WaitForSingleObject(proc, INFINITE);
-        
-        if (result == WAIT_FAILED) {
-            log_ex(Log_Level::NORMAL, Log_Type::ERRO, "could not wait on child process: ", (u64) GetLastError());
-            return false;
+    bool wait(Array<Process> procs) {
+        bool ok = true;
+        for (auto proc : procs) {
+            ok = wait(proc) && ok;
         }
-    
-        DWORD exit_status;
-        if (!GetExitCodeProcess(proc, &exit_status)) {
-            log_ex(Log_Level::NORMAL, Log_Type::ERRO, "could not get process exit code: ", (u64) GetLastError());
-            return false;
-        }
-    
-        if (exit_status != 0) {
-            log_ex(Log_Level::NORMAL, Log_Type::ERRO, "command exited with exit code ", (u64) exit_status);
-            return false;
-        }
-    
-        CloseHandle(proc);
-    
-        return true;
+        return ok;
     }
-#elif defined(__linux__) || defined(__APPLE__)
-    #include <sys/wait.h>
-    bool wait(Process proc) {
-        for (;;) {
-            int wstatus = 0;
-            if (waitpid(proc, &wstatus, 0) < 0) {
-                log_ex(Log_Level::NORMAL, Log_Type::ERRO, "could not wait on command "_str, proc, strerror(errno));
-                return false;
-            }
     
-            if (WIFEXITED(wstatus)) {
-                int exit_status = WEXITSTATUS(wstatus);
-                if (exit_status != 0) {
-                    log_ex(Log_Level::NORMAL, Log_Type::ERRO, "command exited with exit code ", exit_status);
-                    return false;
-                }
-    
-                break;
-            }
-    
-            if (WIFSIGNALED(wstatus)) {
-                log_ex(Log_Level::NORMAL, Log_Type::ERRO, "command process was terminated by ", strsignal(WTERMSIG(wstatus)));
-                return false;
-            }
-        }
-        return true;
-    }
-#endif
-
-    
-#ifdef _WIN32
-    Process run_command_async(Array<cstr> args) {
-        // https://docs.microsoft.com/en-us/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output
         
-        STARTUPINFO siStartInfo;
-        ZeroMemory(&siStartInfo, sizeof(siStartInfo));
-        siStartInfo.cb = sizeof(STARTUPINFO);
-        // NOTE: theoretically setting NULL to std handles should not be a problem
-        // https://docs.microsoft.com/en-us/windows/console/getstdhandle?redirectedfrom=MSDN#attachdetach-behavior
-        // TODO: check for errors in GetStdHandle
-        siStartInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        siStartInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        siStartInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
-        
-        PROCESS_INFORMATION piProcInfo;
-        ZeroMemory(&piProcInfo, sizeof(PROCESS_INFORMATION));
-        
-        auto mark = context.temporary_storage.mark;
-            String_Builder sb(TEMP);
-            for (auto* it = args.data; it != args.data + args.count; it++) {
-                if (it != args.data) sb.push(' ');
-                if (!strchr(*it, ' ')) {
-                    format(&sb, *it);
-                } else {
-                    sb.push('\"');
-                    format(&sb, *it);
-                    sb.push('\"');
-                }
-            }
-            sb.push(0);
-            log_info(sb.data);
-            BOOL bSuccess = CreateProcessA(NULL, sb.data, NULL, NULL, TRUE, 0, NULL, NULL, &siStartInfo, &piProcInfo);
-        context.temporary_storage.mark = mark;
-        
-        if (!bSuccess) {
-            // TODO: log_error
-            log_error("Could not create child process: ", (u64) GetLastError());
-            return 0;
-        }
-        
-        CloseHandle(piProcInfo.hThread);
-        return piProcInfo.hProcess;
-    }
-#else
-    Process run_command_async(Array<cstr> args) {
-        pid_t cpid = fork();
-        if (cpid < 0) {
-            log_ex(Log_Level::NORMAL, Log_Type::ERRO,  "Could not fork child process: ", strerror(errno));
-            return 0;
-        }
-        
-        if (cpid == 0) {
-            List<cstr> cmd {};
-            String_Builder sb {};
-            
-            for (auto it : args) {
-                cmd.push(it);
-                if (!strchr(it, ' ')) {
-                    format(&sb, it);
-                } else {
-                    sb.push('\"');
-                    format(&sb, it);
-                    sb.push('\"');
-                }
-                sb.push(' ');
-            }
-            cmd.push(nullptr);
-            
-            log_info(sb.data);
-        
-            if (execvp(cmd.data[0], (char * const*) cmd.data) < 0) {
-                log_ex(Log_Level::NORMAL, Log_Type::ERRO,  "Could not exec child process: ", strerror(errno));
-                exit(1);
-            }
-            assert(0 && "unreachable");
-        }
-        return cpid;
-    }
-#endif
-    
     // Base Hash Imlementation
     u64 hash(Array<u8> bytes) {
         u64 hash = 5381;
@@ -1447,7 +1251,7 @@ namespace ncz {
     void format(String_Builder* sb, u64 x) {
         constexpr const auto MAX_LEN = 32;
         char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%lu", x);
+        auto len = snprintf(buf, MAX_LEN, "%llu", x);
         assert(len > 0);
         while (sb->capacity < sb->count + len) sb->expand();
         assert(sb->capacity >= sb->count + len);
@@ -1470,5 +1274,3 @@ namespace ncz {
     }
 }
 #endif // NCZ_IMPLEMENTATION
-
-#endif 
