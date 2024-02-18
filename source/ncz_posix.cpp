@@ -5,8 +5,6 @@
 #include <fcntl.h>
 #include <dlfcn.h>
 #include <sys/mman.h>
-#include <execinfo.h>
-
 
 Page _os_get_page(u64 size) {
     u64 s   = align(size, NCZ_PAGE_SIZE);
@@ -117,16 +115,16 @@ Process run_command_async(Array<cstr> args, bool trace) {
     return cpid;
 }
 
-void log_stack_trace() {
-    void* callstack[128];
-    int frames = backtrace(callstack, 128);
-    char** strs = backtrace_symbols(callstack, frames);
+void log_stack_trace(int skip) {
+    // void* callstack[128];
+    // int frames = backtrace(callstack, 128);
+    // char** strs = backtrace_symbols(callstack, frames);
 
-    for (int i = 0; i < frames; ++i) {
+    // for (int i = 0; i < frames; ++i) {
         // printf("Stack frame #%d: %s\n", i, strs[i]);
 
         // Prepare the addr2line command
-        run_cmd("addr2line", "-f", "-p", "-C", "-e", "build.exe", tprint((void*)callstack[i]).data);
+        // run_cmd("addr2line", "-f", "-p", "-C", "-e", "build.exe", tprint((void*)callstack[i]).data);
         // char command[512];
         // snprintf(command, sizeof(command), "addr2line -f -p -C -e ./build.out %p", callstack[i]);
 
@@ -142,9 +140,8 @@ void log_stack_trace() {
         // } else {
         //     printf("Failed to run addr2line command.\n");
         // }
-    }
-
-    free(strs);
+    // }
+    // free(strs);
 }
 
 bool needs_update(String output_path, Array<String> input_paths) {

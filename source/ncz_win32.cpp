@@ -123,7 +123,7 @@ Process run_command_async(Array<cstr> args, bool trace) {
 }
 
 // TODO: once we can capture output from procs we should make the mingw version not suck
-void log_stack_trace() {
+void log_stack_trace(int skip) {
     // Initialize symbols
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
     SymInitialize(GetCurrentProcess(), NULL, TRUE);
@@ -158,17 +158,13 @@ void log_stack_trace() {
     NCZ_DEFER(::ncz::context.temporary_storage.mark = mark);
     
     
-    #ifdef __GNUC__
-    List<cstr> addr2line(NCZ_TEMP);
-    addr2line.append("addr2line", "-f", "-p", "-C", "-e", __argv[0]);
-    log_ex(Log_Level::TRACE, Log_Type::INFO, "Stack Trace:");
-    #else
     String_Builder sb(NCZ_TEMP);
     format(&sb, "Stack Trace:\n"_str);
-    #endif // __GNUC__
     
     // Walk the stack
     while (StackWalk64(machineType, GetCurrentProcess(), GetCurrentThread(), &stackFrame, &context, NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL)) {
+        if (skip) { --skip; continue; }
+        
         DWORD64 displacement = 0;
         const int bufferSize = 1024;
         char buffer[sizeof(SYMBOL_INFO) + bufferSize] = { 0 };
@@ -182,22 +178,14 @@ void log_stack_trace() {
             DWORD lineDisplacement;
             line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
             // Get line information
-            #ifdef __GNUC__
-            addr2line.push(tprint((void*)stackFrame.AddrPC.Offset).data);
-            NCZ_DEFER(addr2line.pop());
-            if (!run_command_sync(addr2line, false)) break;
-            #else
             if (SymGetLineFromAddr64(GetCurrentProcess(), stackFrame.AddrPC.Offset, &lineDisplacement, &line)) {
                 write(&sb, line.FileName, ":", (u64) line.LineNumber-1, ": ");
             } else {
                 write(&sb, "unknown: ");
             }
             write(&sb, symbol->Name, "\n");
-            #endif // __GNUC__
         } else {
-            #ifndef __GNUC__
             write(&sb, "unknown:\n");
-            #endif
         }
         
         if (strcmp(symbol->Name, "main") == 0) break;

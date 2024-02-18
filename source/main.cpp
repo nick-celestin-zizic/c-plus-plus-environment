@@ -38,7 +38,7 @@ namespace ncz {
 // log(str);
 // exit(0);
 
-static const int FACTOR        = 400;
+static const int FACTOR        = 200;
 static const int SCREEN_WIDTH  = 4 * FACTOR;
 static const int SCREEN_HEIGHT = 3 * FACTOR;
 

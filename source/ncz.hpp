@@ -26,9 +26,8 @@ typedef int64_t     s64;
 typedef uint64_t    u64;
 typedef uintptr_t   usize;
 
-#define NCZ_ASSERTION_HANDLER exit(1)
 
-#define assert(cond) if (!(cond)) { ::ncz::log_stack_trace(); NCZ_ASSERTION_HANDLER; }
+#define assert(cond) if (!(cond)) ::ncz::failed_assert(#cond, ::ncz::Source_Location {__FILE__, __LINE__})
 
 #pragma region ModuleParameters
 #ifndef NCZ_PAGE_SIZE
@@ -46,6 +45,9 @@ typedef uintptr_t   usize;
 #define NCZ_GENSYM(x)     NCZ_CONCAT(x, __COUNTER__)
 #define NCZ_DEFER(code) ::ncz::Defer NCZ_GENSYM(_defer_) {[&](){code;}}
 #define NCZ_HERE ::ncz::Source_Location {__FILE__, __LINE__}
+
+#define trace(...) log(::ncz::Source_Location {__FILE__, __LINE__}, ": ", __VA_ARGS__)
+#define trace_error(...)  log_ex(Log_Level::NORMAL,  Log_Type::ERRO, ::ncz::Source_Location {__FILE__, __LINE__}, ": ", __VA_ARGS__)
 
 // stolen nob Go Rebuild Urself™ Technology
 // from: https://github.com/tsoding/musializer/blob/master/src/nob.h#L260
@@ -66,6 +68,7 @@ typedef uintptr_t   usize;
 #pragma endregion
 
 namespace ncz {
+    void log_stack_trace(int skip = 0);
     template <typename F>
     struct Defer {
         F f;
@@ -73,7 +76,8 @@ namespace ncz {
         ~Defer() { f(); }
     };
     struct Source_Location { cstr file; s64 line; };
-    #define trace(...) log(ncz::Source_Location {__FILE__, __LINE__}, ": ", __VA_ARGS__)
+    
+    void failed_assert(cstr repr, Source_Location loc);
     
 #pragma region MemoryPrimitives
     // Allocator Type
@@ -328,9 +332,10 @@ namespace ncz {
         // Allocator allocator         = get_unmapping_allocator();
     // Context
     struct Context {
-        Allocator allocator        = crt_allocator;
-        Logger    logger           = crt_logger;
-        Pool     temporary_storage = Pool(32 * 1024, crt_allocator);
+        Allocator allocator         = crt_allocator;
+        Logger    logger            = crt_logger;
+        Pool      temporary_storage = Pool(32 * 1024, crt_allocator);
+        bool      handling_assert   = false;
     };
     
     extern thread_local Context context;
@@ -794,22 +799,7 @@ namespace ncz {
     #define log_error(...) log_ex(Log_Level::NORMAL,  Log_Type::ERRO, __VA_ARGS__)
     #define log_warn(...)  log_ex(Log_Level::WARN,    Log_Type::ERRO, __VA_ARGS__)
     
-    #define trace_info(...)  TODO
-    #define trace_error(...) TODO
-    #define trace_warn(...)  TODO
-    
     #define show(expr) TODO_VERBOSE_INFO_AND_STRINGIFY
-    
-    // #define NCZ_TEMP ::ncz::context.temporary_storage
-    
-    #if 0
-    #ifdef DEVELOPER
-    #define assert(cond, ...) \
-        if (!(cond)) (trace_error("Assertion `" STRINGIFY(cond) "` Failed: "_str, __VA_ARGS__), NCZ_FAILED_ASSERTION_HANDLER())
-    #else
-    #define assert(...)
-    #endif
-    #endif
     
     template <typename ...Args>
     void log_ex(Log_Level level, Log_Type type, Args... args) {
@@ -887,7 +877,6 @@ bool rename_file(String old_path, String new_path);
     }
     void maybe_reload_cpp_script(Array<cstr> args, cstr src);
     String to_string(cstr c);
-    void log_stack_trace();
 #pragma endregion
 }
 #endif // NCZ_HPP_
@@ -903,6 +892,14 @@ namespace ncz {
 #endif
 
     thread_local Context context {};
+    
+    void failed_assert(cstr repr, Source_Location loc) {
+        if (context.handling_assert) return;
+        context.handling_assert = true;
+        log_error(loc, ": Assertion `", repr, "` Failed!");
+        log_stack_trace(2);
+        exit(1); // TODO
+    }
     
     String::String()
         : Array<char> {} {}
@@ -1265,7 +1262,7 @@ namespace ncz {
     void format(String_Builder* sb, s64 x) {
         constexpr const auto MAX_LEN = 32;
         char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%l", x);
+        auto len = snprintf(buf, MAX_LEN, "%lld", x);
         assert(len > 0);
         while (sb->capacity < sb->count + len) sb->expand();
         assert(sb->capacity >= sb->count + len);
