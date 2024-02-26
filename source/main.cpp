@@ -1,144 +1,131 @@
 #define NCZ_IMPLEMENTATION
-#include "ncz.hpp"
+#include "nczlib/ncz.hpp"
+#include "raylib/raylib.cpp"
 
-namespace rl {
-    #include "raylib/raylib.h"
-}
-
-namespace ncz {
-    void format(ncz::String_Builder* sb, rl::Vector2 v) {
-        ncz::write(sb, "(", v.x, ", ", v.y, ")");
-    }
-    void format(ncz::String_Builder* sb, rl::Rectangle r) {
-        ncz::write(sb, "{x: ", r.x, ", y: ", r.y, ", w: ", r.width, ", h: ", r.height, "}");
-    }
-    void raylib_trace_log_adapter(int log_level, cstr text, void* args) {
-        Log_Type type;
-        if      (log_level <= rl::LOG_INFO)    type = Log_Type::INFO;
-        else if (log_level == rl::LOG_WARNING) type = Log_Type::WARN;
-        else                                   type = Log_Type::ERRO;
-        static char buf[1024];
-        vsnprintf(buf, 1024, text, (va_list) args);
-        context.logger.labels.push("raylib");
-        log_ex(Log_Level::TRACE, type, buf);
-        context.logger.labels.pop();
-    }
-}
-
-// TODO: figure out how to do backtraces sighhhh
-// Array<void*> backtrace {};
-// backtrace.count = CaptureStackBackTrace(0, 65535, backtrace.data, nullptr);
-// log(backtrace);
-// char buf[256];
-// FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-//                NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), 
-//                buf, (sizeof(buf) / sizeof(wchar_t)), NULL);
-// auto str = String { buf, strlen(buf) };
-// if (str[str.count-1] == '\n') str.count -= 1;
-// log(str);
-// exit(0);
-
-static const int FACTOR        = 200;
+static const int FACTOR        = 300;
 static const int SCREEN_WIDTH  = 4 * FACTOR;
 static const int SCREEN_HEIGHT = 3 * FACTOR;
 
-#include "pongout.cpp"
+static const int   PADDLE_WIDTH  = SCREEN_WIDTH / 10.f;
+static const int   PADDLE_HEIGHT = PADDLE_WIDTH / 5.0f;
+static const float PADDLE_SPEED  = SCREEN_WIDTH * .75f;
 
-void hello_world() {
-    using namespace rl;
-    u64 frame = 0;
-    while (!WindowShouldClose()) {
-        ncz::context.temporary_storage.reset();
-        frame += 1;
-        
-        BeginDrawing();
-        ClearBackground(rl::WHITE);
+bool paused     = false;
+u64  frame      = 0;
+float hue_angle = 0;
 
-        const int height = 50;
-        const int x      = 10;
-        int y            = 10;
-        
-        DrawSomeText("Hello, World!", x, y, height, rl::BLACK);
-        y += height;
-        
-        DrawSomeText("Hello, Again!", x, y, height, rl::BLACK);
-        y += height;
-        
-        auto text = ncz::tprint("Hello on frame ", frame, "!!!!");
-        DrawSomeText(text.data, x, y, height, rl::BLACK);
-        y += height;
-        EndDrawing();
+float       circle_radius = PADDLE_HEIGHT * 0.75f;
+rl::Vector2 circle_position { 100, 300 };
+rl::Vector2 circle_velocity { PADDLE_SPEED, PADDLE_SPEED };
+
+float paddle_velocity = 0;
+rl::Rectangle paddle {
+    (SCREEN_WIDTH / 2) - (PADDLE_WIDTH / 2),
+    SCREEN_HEIGHT - 2  * PADDLE_HEIGHT,
+    PADDLE_WIDTH, PADDLE_HEIGHT
+};
+
+void run_frame() {
+    ncz::context.temporary_storage.reset();
+    
+    frame += 1;
+    float dt = rl::GetFrameTime(), w = SCREEN_WIDTH, h = SCREEN_HEIGHT;
+    if (rl::IsKeyPressed(rl::KEY_SPACE)) paused = !paused;
+
+    if (!paused) {
+        // update paddle
+        paddle_velocity = 0;
+        if (rl::IsKeyDown(rl::KEY_RIGHT) || rl::IsKeyDown(rl::KEY_D)) paddle_velocity += PADDLE_SPEED;
+        if (rl::IsKeyDown(rl::KEY_LEFT)  || rl::IsKeyDown(rl::KEY_A)) paddle_velocity -= PADDLE_SPEED;
+        paddle.x += paddle_velocity * dt;
+        ncz::clamp(&paddle.x, 0.0f, w - paddle.width);
+
+        // update ball
+        circle_position.x += circle_velocity.x * dt;
+        circle_position.y += circle_velocity.y * dt;
+        if (circle_position.x < circle_radius || circle_position.x > w - circle_radius) circle_velocity.x *= -1;
+        if (circle_position.y < circle_radius || circle_position.y > h - circle_radius) circle_velocity.y *= -1;
+        ncz::clamp(&circle_position.x, circle_radius, w - circle_radius);
+        ncz::clamp(&circle_position.y, circle_radius, h - circle_radius);
+
+        if (rl::CheckCollisionCircleRec(circle_position, circle_radius, paddle)) {
+            if (circle_position.y < paddle.y
+            &&  circle_position.y > paddle.y - circle_radius) {
+                circle_position.y = paddle.y - circle_radius;
+                circle_velocity.y *= -1;
+            }
+            if (circle_position.x < paddle.x
+            &&  circle_position.x > paddle.x - circle_radius) {
+                circle_position.x = paddle.x - circle_radius;
+                circle_velocity.x *= -1;
+            }
+            if (circle_position.y > paddle.y + paddle.height
+            &&  circle_position.y < paddle.y + paddle.height + circle_radius) {
+                circle_position.y = paddle.y + paddle.height + circle_radius;
+                circle_velocity.y *= -1;
+            }
+            if (circle_position.x > paddle.x + paddle.width
+            &&  circle_position.x < paddle.x + paddle.width + circle_radius) {
+                circle_position.x = paddle.x + paddle.width + circle_radius;
+                circle_velocity.x *= -1;
+            }
+        }
+
+        hue_angle = fmodf(hue_angle + 10.0f * dt, 360.0f);
     }
+
+    // draw the scene
+    auto color = rl::ColorFromHSV(hue_angle, 1.0f, 1.0f);
+    rl::BeginDrawing();
+        rl::ClearBackground(rl::DARKGRAY);
+
+        auto stats = ncz::tprint("ball:   ", circle_position, "\n\n\n",
+                                 "paddle: ", paddle,          "\n\n\n",
+                                 "frame:  ", frame,           "\n\n\n");
+        rl::DrawSomeText(stats.data, SCREEN_WIDTH*0.025f, SCREEN_HEIGHT*0.05f, 30, color);
+
+        if (paused) {
+            const int font_size = 100;
+            cstr text           = "PAUSED.";
+            int  text_width     = rl::MeasureText(text, font_size);
+            rl::DrawSomeText(text,
+                SCREEN_WIDTH  / 2 - text_width / 2,
+                SCREEN_HEIGHT / 2 - font_size  / 2,
+                font_size, color
+            );
+        }
+
+        rl::DrawCircleV(circle_position, circle_radius, color);
+        rl::DrawRectangleRec(paddle, color);
+    rl::EndDrawing();
 }
 
-void command_line(Array<cstr> args) {
-    using namespace ncz;
-    context.logger.labels.push("command line");
-    NCZ_DEFER(context.logger.labels.pop());
-    
-    auto& ls = context.logger.labels;
-    ls.push("loops");
-        log("args are ", args);
-        for (cstr arg : args) log("ARG: ", arg);
-    ls.pop();
-    
-    cstr exe = *args.advance();
-    log("WOW THE EXE IS ", exe);
-    if (!args.count) return;
-    
-    ls.push("string manipulation");
-        args.advance();
-        String str = from_cstr(*args.advance());
-        log("BEFORE: ", str);
-        String lhs = str.chop_by(' ');
-        log("L \"", lhs, "\" and R \"", str, "\"");
-    ls.pop();
-    
-    cstr f = *args.advance();
-    log("heuheuheuhue ", f);
-}
-
-int main(int argc, cstr* argv) {
-    command_line({ argv, (usize) argc });
+int main(void) {
+    rl::InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "wow wasm with raylib so cool");
+    #ifdef  WEB_BUILD
+    raylib_js_set_entry(run_frame);
+    #else
     rl::SetTraceLogCallback(ncz::raylib_trace_log_adapter);
-    rl::SetTargetFPS(144);
-    rl::InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "BREAKOUT :D");    
-    // hello_world();
-    // return 69;
-    breakout();
+    while (!rl::WindowShouldClose()) run_frame();
+    rl::CloseTheWindow();
+    #endif//WEB_BUILD
     
-    // Array         <type> ();
-    // Dynamic_Array <type> (allocator);
+    // Array       <type>            ();
+    // Fixed_Array <type, len>       ();
+    // List        <type>            (allocator);
+    // Fixed_List  <type, capacity>  ();
+    // Array_List  <type, array_len> (allocator);
+    // Cache       <type>            (allocator);
+    // Set         <type>            (allocator);
+    // Map         <ktype, vtype>    (allocator);
     
     // Arena       <>         (align, block_size, allocator);
     // Flat_Arena  <>         (align, reserve);
     // Fixed_Arena <capacity> (align);
     
-    // Bucket_Array <type, items_per_bucket> (allocator);
-    // Slab_Array   <type, pages_per_slab>   ();
-    // Fixed_Array  <type, capacity>         ();
-    
-    // malloc;
-    // Slab_Heap  <>         (align);
-    // Fixed_Heap <capacity> (align);
-    
-    // ncz::Bucket_Array <int> funny {};
-    // // ncz::Slab_Array   <int> epic  {};
-    // // ncz::Bucket_Array <int> funny {};
-    // for (int i = 0; i <= 256; ++i) {
-    //     auto& epic = funny[funny.get()];
-    //     epic = i;
-    //     log("lol ", epic);
-    // }
-    
-    // log(funny.count);
-    // log(funny.all_buckets.count);
-    
-    // return 69;
-    // for (auto it : funny) { 
-    //     log("WOWOWOWO A ", it);
-    // }
-    
-    // rl::CloseTheWindow();
-    // return 0;
+    // allocate
+    // dispose
+    // resize
+    // create_heap
+    // destroy_heap
 }

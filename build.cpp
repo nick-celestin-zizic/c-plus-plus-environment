@@ -1,173 +1,202 @@
-#define BUILD_NATIVE
-#define BUILD_WEB
-#define OUTPUT_NAME "breakout"
-#define BUILD_SCRIPT_MEMORY_LIMIT 20 * 1024
-// #define DEVELOPER
-// #define OPTIMIZED
-// #define DISABLE_ASSERT
-
-// #define POST_BUILD() if (!run_cmd(OUTPUT)) return 1
-// #define POST_BUILD() if (!run_cmd("remedybg.exe", OUTPUT_DIR OUTPUT_NAME)) exit(1)
-// #define POST_BUILD() if (!run_cmd(PY, "-m", "http.server", "-d", OUTPUT_DIR)) return 1
-
-// we are going to get our build tools from the emsdk
-// https://emscripten.org/
-#define EMSDK "tools/emsdk/"
-
-// The final output of this build system is a website
-// with a c++ program embedded in it, but since the webassembly
-// compiler is slower than a normal c compiler we'll use clang to
-// build a native application that we can use during development.
-#define CC EMSDK "upstream/bin/clang"
-#define AR EMSDK "upstream/bin/llvm-ar"
-
-// The WebAssembly compiler toolchain is actually a series of
-// python scripts that call clang and llvm-ar in funky ways
-#define PY EMSDK "python/3.9.2-nuget_64bit/python.exe"
-#define EMCC PY, EMSDK "upstream/emscripten/emcc.py"
-#define EMAR PY, EMSDK "upstream/emscripten/emar.py"
-
-#define NCZ_DEFAULT_LIST_CAPACITY 32
-#define NCZ_CC(bin, src) CC, "-g", "-std=c++17", "-ldbghelp", "-o", bin, src
 #define NCZ_IMPLEMENTATION
-#include "source/ncz.hpp"
+#include "source/nczlib/ncz.hpp"
 using namespace ncz;
 
-// template <typename F> void visit_files(String dir, F visit_proc)
-// List<String> srcs {}; visit_files("source"str, [&](String path){ if (!path.contains("raylib"str)) src.push(path.copy()); })
-// if (needs_update(String::from_cstr(OUTPUT), srcs)) { ... }
+#define BUILD_NATIVE
+#define BUILD_WEB
 
-#define OUTPUT_DIR  "build/"
-#define TEMP_DIR    "build/temp/"
-#define ENTRY_POINT "source/main.cpp"
-#define RAYLIB_DIR  "source/raylib/"
+#define PROJECT_NAME "test-application"
+
+#define OUT_DIR     "./output/"
+#define TMP_DIR     "./temporary/"
+#define ENTRY_POINT "./source/main.cpp"
+
+// you can bootstrap the build system with this command:
+// WINDOWS: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -ldbghelp -Xlinker /INCREMENTAL:NO -Xlinker /NOLOGO -Xlinker /NOIMPLIB -Xlinker /NODEFAULTLIB:msvcrt.lib -o build.exe build.cpp
+// POSIX: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -o build.out build.cpp
+// after that you just have to run build.exe
 
 bool build_dependencies();
 bool build_application();
 
-#ifdef _WIN32
-#define OUTPUT OUTPUT_DIR OUTPUT_NAME ".exe"
-#else
-#define OUTPUT OUTPUT_DIR OUTPUT_NAME
-#endif // _WIN32
-
 int main(int argc, cstr *argv) {
-    context.logger.labels.push("config");
     NCZ_CPP_FILE_IS_SCRIPT(argc, argv);
-    context.logger.labels.pop();
     context.logger.labels.push("build");
     
-    auto global_arena = use_global_arena<BUILD_SCRIPT_MEMORY_LIMIT>();
-    NCZ_DEFER(log("script used ", global_arena->data.count, " bytes."));
-    
-    if (!build_dependencies()) return 1;
-    if (!build_application())  return 1;
-    
-    #ifdef POST_BUILD
-    POST_BUILD();
-    #endif
+    #ifdef  BUILD_NATIVE
+    assert(build_dependencies());
+    #endif//BUILD_NATIVE
+    assert(build_application());
     
     return 0;
 }
+
+#ifdef _WIN32
+#define EXE OUT_DIR PROJECT_NAME ".exe"
+#else
+#define EXE OUT_DIR PROJECT_NAME
+#endif // _WIN32
 
 static const cstr raylib_compilation_unit_names[] = {
     "raudio", "rcore", "rglfw", "rmodels", "rshapes", "rtext", "rtextures", "utils"
 };
 static const Array<cstr> raylib_units = {
-    (cstr*)raylib_compilation_unit_names, sizeof(raylib_compilation_unit_names)/sizeof(raylib_compilation_unit_names[0])
+    (cstr*)raylib_compilation_unit_names,
+    sizeof(raylib_compilation_unit_names)/sizeof(raylib_compilation_unit_names[0])
 };
 
 bool build_dependencies() {
-    List<Process>  procs      {};
-    String_Builder input_path {};
-    
     List<cstr> cc {};
     List<cstr> ar {};
-    auto build_with_cc = [&](bool web) {
-        #ifdef OPTIMIZED
-        cc.push("-Os");
-        #endif // OPTIMIZED
-        
-        auto target = web ? "-web"_str : "-native"_str;
-        
-        #ifdef _WIN32
-        cstr lib_name = cprint(TEMP_DIR "raylib", target, ".lib"_str).data;
+    
+    cc.append("clang", "-std=c11", "-nostdlib", "-Wno-everything",
+              "-I./source/raylib/external/glfw/include",
+              "-DPLATFORM_DESKTOP", "-g", "-c");
+    
+    ar.append("llvm-ar", "crs",
+        #ifndef _WIN32
+        TMP_DIR "libraylib.a"
         #else
-        cstr lib_name = cprint(TEMP_DIR "libraylib", target, ".a"_str).data;
-        #endif // _WIN32
-        
-        cc.append("-Wno-everything", "-std=gnu11", "-I./" RAYLIB_DIR "external/glfw/include", "-c");
-        ar.append("crs", lib_name);
-        
-        for (cstr unit : raylib_units) {
-            if (web && strcmp(unit, "rglfw") == 0) continue;
-            input_path.count = 0;
-            write(&input_path, RAYLIB_DIR, unit, ".c\0"_str);
-            String object_file = cprint(TEMP_DIR, unit, target, ".o");
-            ar.push(object_file.data);
-            
-            if (!needs_update(object_file, {input_path.data, input_path.count})) continue;
-            
-            cc.append(input_path.data, "-o", object_file.data);
-                procs.push(run_command_async(cc));
-            cc.count -= 3;
-        }
-        
-        if (!wait(procs)) return false;
-        if (procs.count)  return run_command_sync(ar);
-        return true;
-    };
+        TMP_DIR "raylib.lib"
+        #endif//_WIN32
+    );
     
-    bool ok = true;
+    List<Process>  procs      {};
+    String_Builder input_path {};
+    for (cstr unit : raylib_units) {
+        input_path.count = 0;
+        print(&input_path, "./source/raylib/"_str, unit, ".c\0"_str);
+        String object_file = cprint(TMP_DIR, unit, ".o"_str);
+        ar.push(object_file.data);
+        
+        if (!needs_update(object_file, {input_path.data, input_path.count})) continue;
+        
+        cc.append(input_path.data, "-o", object_file.data);
+            procs.push(run_command_async(cc));
+        cc.count -= 3;
+    }
     
-#ifdef BUILD_WEB
-    log("compiling raylib to wasm");
-    cc.append(EMCC, "-DPLATFORM_WEB", "-DGRAPHICS_API_OPENGL_ES2");
-    ar.append(EMAR);
-    ok = build_with_cc(true);
-#endif // BUILD_WEB
-
-#ifdef BUILD_NATIVE
-    log("compiling native raylib");
-    procs.count = 0; input_path.count = 0; cc.count = 0; ar.count = 0;
-    cc.append(CC, "-g", "-DPLATFORM_DESKTOP");
-    ar.append(AR);
-    ok = build_with_cc(false);
-#endif // BUILD_NATIVE
-
-    return ok;
+    if (!wait(procs)) return false;
+    if (procs.count)  return run_command_sync(ar);
+    return true;
 }
+
+bool read_file(String_Builder *out, cstr path);
+String read_file(cstr path);
+bool write_file(cstr path, String data);
 
 bool build_application() {
     List<cstr> cmd {};
-    bool ok = true;
-    
-    // List<String> sources {};
-    // visit_files("./src"_str, [&] (String path) { if (!path.includes(to_string(RAYLIB_DIR))) sources.push(path); });
-    
-#ifdef BUILD_WEB
+#ifdef  BUILD_NATIVE
     cmd.count = 0;
-    if (needs_update(cprint(OUTPUT_DIR, "index.html"), "source/main.cpp"_str)) {
-        cmd.append(EMCC, "-std=c++17", "-o", OUTPUT_DIR "index.html");
-        cmd.append("-sTOTAL_MEMORY=67108864","-sUSE_GLFW=3", "-sASSERTIONS", "-sASYNCIFY", "-sFORCE_FILESYSTEM", "-sGL_ENABLE_GET_PROC_ADDRESS", "--profiling");
-        cmd.append(ENTRY_POINT, "-L" TEMP_DIR, "-lglfw", "-lraylib-web", "--shell-file", "source/shell.html");
-        ok = run_command_sync(cmd);
-    }
+    cmd.append("clang", NCZ_CFLAGS, ENTRY_POINT, "-o", EXE, "-DPLATFORM_DESKTOP",
+               "-I./source/raylib/external/glfw/include",
+               "-L" TMP_DIR, "-lraylib", NCZ_LDFLAGS);
+#ifdef _WIN32
+    cmd.append("-lwinmm", "-lgdi32", "-luser32", "-lshell32");
 #endif
+    if (!run_command_sync(cmd)) return false;
+#endif//BUILD_NATIVE
+
+#ifdef  BUILD_WEB
+    cmd.count = 0;
+    cmd.append("clang", "-std=c++17", NCZ_RCFLAGS, ENTRY_POINT, "-Os",
+        "--target=wasm32-wasi", "--sysroot=temporary/wasi-sysroot",
+        "-nodefaultlibs", "-L./temporary/wasi-sysroot/lib/",
+        "-DNCZ_NO_MULTIPROCESSING",
+        "-DWEB_BUILD",
+        "-D_WASI_EMULATED_MMAN", "-lwasi-emulated-mman",
+        "-lc", "-Wl,--allow-undefined", "-Wl,--export-all",
+        "-o", TMP_DIR PROJECT_NAME ".wasm"
+    );
     
-#ifdef BUILD_NATIVE
-    if (needs_update(to_string(OUTPUT), "source/main.cpp"_str)) {
-        cmd.count = 0;
-        cmd.append(CC, ENTRY_POINT, "-g", "-std=c++17", //"-Wall", "-Wextra",
-                   "-Wpedantic", "-o", OUTPUT, "-DPLATFORM_DESKTOP",
-                   "-I" RAYLIB_DIR "/src/external/glfw/include",
-                   "-L" TEMP_DIR, "-lraylib-native");
-    #ifdef _WIN32
-        cmd.append("-lwinmm", "-lgdi32", "-luser32", "-lshell32");
-    #endif
-        ok = run_command_sync(cmd);
+    if (!run_command_sync(cmd)) return false;
+    
+    String_Builder out {};
+    String wasm_bin = read_file(TMP_DIR PROJECT_NAME ".wasm");
+    if (!wasm_bin.count) return false;
+    
+    // embed raylib and wasm application into html
+    // NOTE: I am not splittting the binary into lines because my latop's and my phone's
+    //       text editor could handle a 300k character line with no problem so the
+    //       additional complexity is not worth it just to support bad text editors.
+    format(&out, "<script>\n"_str);
+        format(&out, "const wasm_bin = new Uint8Array(["_str);
+        for (char c : wasm_bin) print(&out, static_cast<u8>(c), ", "_str);
+        format(&out, "]);\n"_str);
+        if (!read_file(&out, "source/raylib/raylib.js")) return false;
+    format(&out, "</script>\n"_str);
+    
+    if (!read_file(&out, "source/index.html")) return false;
+    // log(String { out.data, out.count });
+    return write_file(OUT_DIR PROJECT_NAME ".html", String { out.data, out.count });
+#endif//BUILD_WEB
+
+    return true;
+}
+
+String read_file(cstr path) {
+    String_Builder sb {};
+    read_file(&sb, path);
+    return {sb.data, sb.count};
+}
+
+bool read_file(String_Builder *out, cstr path) {
+    char buffer[256];
+    #define CHECK(x, e) if (x) {                           \
+    strerror_s(buffer, sizeof(buffer), (e));               \
+    log_error("Could not read file ", path, ": ", buffer); \
+    return false;                                          \
     }
-#endif
     
-    return ok;
+    FILE *f = nullptr;
+    errno_t err = fopen_s(&f, path, "rb");
+    CHECK(err, err);
+    NCZ_DEFER(fclose(f));
+    CHECK(fseek(f, 0, SEEK_END) < 0, errno);
+    
+    long m = ftell(f);
+    CHECK(m < 0, errno);
+    CHECK(fseek(f, 0, SEEK_SET) < 0, errno);
+
+    size_t new_count = out->count + m;
+    if (new_count > out->capacity) {
+        out->data     = static_cast<char*>(resize(out->data, new_count, out->count));
+        out->capacity = new_count;
+    }
+
+    fread(out->data + out->count, m, 1, f);
+    err = ferror(f);
+    CHECK(err, err);
+    out->count = new_count;
+    
+    return true;
+    #undef CHECK
+}
+
+bool write_file(cstr path, String data) {
+    char buffer[256];
+    #define CHECK(x, e) if (x) {                                    \
+    strerror_s(buffer, sizeof(buffer), (e));                        \
+    log_error("Could not write data to file ", path, ": ", buffer); \
+    return false;                                                   \
+    }
+    
+    FILE *f = nullptr;
+    errno_t err = fopen_s(&f, path, "wb");
+    CHECK(err, err);
+    NCZ_DEFER(fclose(f));
+    
+    char *buf = data.data;
+    int  size = data.count;
+    while (size > 0) {
+        usize n = fwrite(buf, 1, size, f);
+        err     = ferror(f);
+        CHECK(err, err);
+        size -= n;
+        buf  += n;
+    }
+    
+    return true;
+    #undef CHECK
 }

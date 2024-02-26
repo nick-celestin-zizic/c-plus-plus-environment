@@ -37,3 +37,7 @@ tools/visual_studio/bin
 tools/visual_studio/tmp
 build/
 build.exe.old
+build.exp
+build.ilk
+build.ilk
+*.exp
