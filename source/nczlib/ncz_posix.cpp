@@ -128,6 +128,9 @@ bool wait(Process proc) {
 #endif//NCZ_NO_MULTIPROCESSING
 
 void log_stack_trace(int skip) {
+    (void) skip;
+    log_error(NCZ_HERE, " TODO: not yet implemented");
+    exit(1);
     // void* callstack[128];
     // int frames = backtrace(callstack, 128);
     // char** strs = backtrace_symbols(callstack, frames);
@@ -156,10 +159,10 @@ void log_stack_trace(int skip) {
     // free(strs);
 }
 
-bool needs_update(String output_path, Array<String> input_paths) {
+bool needs_update(cstr output_path, Array<cstr> input_paths) {
     struct stat statbuf {};
     
-    if (stat(output_path.data, &statbuf) < 0) {
+    if (stat(output_path, &statbuf) < 0) {
         // NOTE: if output does not exist it 100% must be rebuilt
         if (errno == ENOENT) return true;
         // nob_log(NOB_ERROR, "could not stat %s: %s", output_path, strerror(errno));
@@ -169,11 +172,10 @@ bool needs_update(String output_path, Array<String> input_paths) {
     int output_path_time = statbuf.st_mtime;
 
     for (size_t i = 0; i < input_paths.count; ++i) {
-        String input_path = input_paths[i];
-        assert(*(input_path.data+input_path.count) == 0);
-        if (stat(input_path.data, &statbuf) < 0) {
+        cstr input_path = input_paths[i];
+        if (stat(input_path, &statbuf) < 0) {
             // NOTE: non-existing input is an error cause it is needed for building in the first place
-            // nob_log(NOB_ERROR, "could not stat %s: %s", input_path, strerror(errno));
+            // nob_log(NOB_ERROR, "could not stat %s: %s", input_path, strerror(errno))
             return false;
         }
         int input_path_time = statbuf.st_mtime;
@@ -184,8 +186,8 @@ bool needs_update(String output_path, Array<String> input_paths) {
     return false;
 }
 
-bool rename_file(String old_path, String new_path) {
-    if (rename(old_path.data, new_path.data) < 0) {
+bool rename_file(cstr old_path, cstr new_path) {
+    if (rename(old_path, new_path) < 0) {
         // nob_log(NOB_ERROR, "could not rename %s to %s: %s", old_path, new_path, strerror(errno));
         return false;
     }

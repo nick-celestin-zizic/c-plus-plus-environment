@@ -11,6 +11,9 @@ using namespace ncz;
 #define TMP_DIR     "./temporary/"
 #define ENTRY_POINT "./source/main.cpp"
 
+#define CC "clang-17"
+// #define CC "clang"
+
 // you can bootstrap the build system with this command:
 // WINDOWS: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -ldbghelp -Xlinker /INCREMENTAL:NO -Xlinker /NOLOGO -Xlinker /NOIMPLIB -Xlinker /NODEFAULTLIB:msvcrt.lib -o build.exe build.cpp
 // POSIX: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -o build.out build.cpp
@@ -46,10 +49,15 @@ static const Array<cstr> raylib_units = {
 };
 
 bool build_dependencies() {
+    // auto old = context.allocator;
+    // context.allocator = NCZ_TEMP;
+    // NCZ_DEFER(context.allocator = old);
+    // NCZ_DEFER(context.temporary_storage.reset());
+    
     List<cstr> cc {};
     List<cstr> ar {};
     
-    cc.append("clang", "-std=c11", "-nostdlib", "-Wno-everything",
+    cc.append(CC, "-std=c11", "-nostdlib", "-Wno-everything",
               "-I./source/raylib/external/glfw/include",
               "-DPLATFORM_DESKTOP", "-g", "-c");
     
@@ -66,12 +74,12 @@ bool build_dependencies() {
     for (cstr unit : raylib_units) {
         input_path.count = 0;
         print(&input_path, "./source/raylib/"_str, unit, ".c\0"_str);
-        String object_file = cprint(TMP_DIR, unit, ".o"_str);
-        ar.push(object_file.data);
+        cstr object_file = cprint(TMP_DIR, unit, ".o"_str).data;
+        ar.push(object_file);
         
-        if (!needs_update(object_file, {input_path.data, input_path.count})) continue;
+        if (!needs_update(object_file, input_path.data)) continue;
         
-        cc.append(input_path.data, "-o", object_file.data);
+        cc.append(input_path.data, "-o", object_file);
             procs.push(run_command_async(cc));
         cc.count -= 3;
     }
@@ -89,7 +97,7 @@ bool build_application() {
     List<cstr> cmd {};
 #ifdef  BUILD_NATIVE
     cmd.count = 0;
-    cmd.append("clang", NCZ_CFLAGS, ENTRY_POINT, "-o", EXE, "-DPLATFORM_DESKTOP",
+    cmd.append(CC, NCZ_CFLAGS, ENTRY_POINT, "-o", EXE, "-DPLATFORM_DESKTOP",
                "-I./source/raylib/external/glfw/include",
                "-L" TMP_DIR, "-lraylib", NCZ_LDFLAGS);
 #ifdef _WIN32
@@ -100,7 +108,7 @@ bool build_application() {
 
 #ifdef  BUILD_WEB
     cmd.count = 0;
-    cmd.append("clang", "-std=c++17", NCZ_RCFLAGS, ENTRY_POINT, "-Os",
+    cmd.append(CC, "-std=c++17", NCZ_RCFLAGS, ENTRY_POINT, "-Os",
         "--target=wasm32-wasi", "--sysroot=temporary/wasi-sysroot",
         "-nodefaultlibs", "-L./temporary/wasi-sysroot/lib/",
         "-DNCZ_NO_MULTIPROCESSING",
@@ -142,16 +150,16 @@ String read_file(cstr path) {
 }
 
 bool read_file(String_Builder *out, cstr path) {
-    char buffer[256];
-    #define CHECK(x, e) if (x) {                           \
-    strerror_s(buffer, sizeof(buffer), (e));               \
-    log_error("Could not read file ", path, ": ", buffer); \
-    return false;                                          \
+    // char buffer[256];
+    // strerror_s(buffer, sizeof(buffer), (e));
+    #define CHECK(x, e) if (x) {                                \
+    log_error("Could not read file ", path, ": ", strerror(e)); \
+    return false;                                               \
     }
     
-    FILE *f = nullptr;
-    errno_t err = fopen_s(&f, path, "rb");
-    CHECK(err, err);
+    FILE *f = fopen(path, "rb");
+    // errno_t err = fopen_s(&f, path, "rb");
+    CHECK(f == NULL, errno);
     NCZ_DEFER(fclose(f));
     CHECK(fseek(f, 0, SEEK_END) < 0, errno);
     
@@ -166,7 +174,7 @@ bool read_file(String_Builder *out, cstr path) {
     }
 
     fread(out->data + out->count, m, 1, f);
-    err = ferror(f);
+    int err = ferror(f);
     CHECK(err, err);
     out->count = new_count;
     
@@ -175,24 +183,24 @@ bool read_file(String_Builder *out, cstr path) {
 }
 
 bool write_file(cstr path, String data) {
-    char buffer[256];
+    // char buffer[256];
+    // strerror_s(buffer, sizeof(buffer), (e));
     #define CHECK(x, e) if (x) {                                    \
-    strerror_s(buffer, sizeof(buffer), (e));                        \
-    log_error("Could not write data to file ", path, ": ", buffer); \
+    log_error("Could not write data to ", path, ": ", strerror(e)); \
     return false;                                                   \
     }
     
-    FILE *f = nullptr;
-    errno_t err = fopen_s(&f, path, "wb");
-    CHECK(err, err);
+    FILE *f = fopen(path, "wb");
+    CHECK(f == NULL, errno);
     NCZ_DEFER(fclose(f));
     
     char *buf = data.data;
     int  size = data.count;
+    int error = 0;
     while (size > 0) {
         usize n = fwrite(buf, 1, size, f);
-        err     = ferror(f);
-        CHECK(err, err);
+        error   = ferror(f);
+        CHECK(error, error);
         size -= n;
         buf  += n;
     }

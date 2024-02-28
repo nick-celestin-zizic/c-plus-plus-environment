@@ -15,7 +15,8 @@ namespace ncz {
         else if (log_level == rl::LOG_WARNING) type = Log_Type::WARN;
         else                                   type = Log_Type::ERRO;
         char buf[1024];
-        vsnprintf(buf, 1024, text, (va_list) args);
+        // auto argp = *(va_list*)(&args);
+        vsnprintf(buf, 1024, text, *(va_list*)(&args));
         context.logger.labels.push("raylib");
         log_ex(Log_Level::TRACE, type, buf);
         context.logger.labels.pop();

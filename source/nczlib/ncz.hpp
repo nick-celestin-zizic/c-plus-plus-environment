@@ -862,9 +862,9 @@ bool run_cmd(Args ... args) {
 
 #pragma endregion
 #pragma region FileSystem
-bool needs_update(String output_path, Array<String> input_paths);
-bool needs_update(String output_path, String input_paths);
-bool rename_file(String old_path, String new_path);
+bool needs_update(cstr output_path, Array<cstr> input_paths);
+bool needs_update(cstr output_path, cstr input_paths);
+bool rename_file(cstr old_path, cstr new_path);
 #pragma endregion
 #pragma region Misc
     // Utililty Templates
@@ -931,18 +931,16 @@ namespace ncz {
         return String { (char*)c, strlen(c) };
     }
     
-    bool needs_update(String output_path, String input_paths) {
+    bool needs_update(cstr output_path, cstr input_paths) {
         return needs_update(output_path, { &input_paths, 1 });
     }
     
     void maybe_reload_cpp_script(Array<cstr> args, cstr src) {
-        auto bin_str = to_string(args[0]);
-        auto src_str = to_string(src);
-        if (needs_update(bin_str, src_str)) {
-            auto old = tprint(bin_str, ".old");
-            if (!rename_file(bin_str, old)) exit(1);
+        if (needs_update(args[0], src)) {
+            cstr old = tprint(args[0], ".old").data;
+            if (!rename_file(args[0], old)) exit(1);
             if (!run_cmd(NCZ_CC(args[0], src))) {
-                rename_file(old, bin_str);
+                rename_file(old, args[0]);
                 exit(1);
             }
             if (!run_command_sync(args)) exit(1);
@@ -1260,7 +1258,7 @@ namespace ncz {
     void format(String_Builder* sb, u64 x) {
         constexpr const auto MAX_LEN = 32;
         char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%llu", x);
+        auto len = snprintf(buf, MAX_LEN, "%" PRIu64, x);
         assert(len > 0);
         while (sb->capacity < sb->count + len) sb->expand();
         assert(sb->capacity >= sb->count + len);
@@ -1274,7 +1272,7 @@ namespace ncz {
     void format(String_Builder* sb, s64 x) {
         constexpr const auto MAX_LEN = 32;
         char buf[MAX_LEN];
-        auto len = snprintf(buf, MAX_LEN, "%lld", x);
+        auto len = snprintf(buf, MAX_LEN, "%" PRId64, x);
         assert(len > 0);
         while (sb->capacity < sb->count + len) sb->expand();
         assert(sb->capacity >= sb->count + len);
