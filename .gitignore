@@ -41,3 +41,6 @@ build.exp
 build.ilk
 build.ilk
 *.exp
+
+!/temporary/wasi-sysroot/**/*.o
+!/temporary/wasi-sysroot/**/*.a
