@@ -11,9 +11,6 @@ using namespace ncz;
 #define TMP_DIR     "./temporary/"
 #define ENTRY_POINT "./source/main.cpp"
 
-#define CC "clang-17"
-// #define CC "clang"
-
 // you can bootstrap the build system with this command:
 // WINDOWS: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -ldbghelp -Xlinker /INCREMENTAL:NO -Xlinker /NOLOGO -Xlinker /NOIMPLIB -Xlinker /NODEFAULTLIB:msvcrt.lib -o build.exe build.cpp
 // POSIX: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -o build.out build.cpp
@@ -57,7 +54,7 @@ bool build_dependencies() {
     List<cstr> cc {};
     List<cstr> ar {};
     
-    cc.append(CC, "-std=c11", "-nostdlib", "-Wno-everything",
+    cc.append("clang", "-std=c11", "-nostdlib", "-Wno-everything",
               "-I./source/raylib/external/glfw/include",
               "-DPLATFORM_DESKTOP", "-g", "-c");
     
@@ -97,18 +94,21 @@ bool build_application() {
     List<cstr> cmd {};
 #ifdef  BUILD_NATIVE
     cmd.count = 0;
-    cmd.append(CC, NCZ_CFLAGS, ENTRY_POINT, "-o", EXE, "-DPLATFORM_DESKTOP",
+    cmd.append("clang", NCZ_CFLAGS, ENTRY_POINT, "-o", EXE, "-DPLATFORM_DESKTOP",
                "-I./source/raylib/external/glfw/include",
                "-L" TMP_DIR, "-lraylib", NCZ_LDFLAGS);
 #ifdef _WIN32
     cmd.append("-lwinmm", "-lgdi32", "-luser32", "-lshell32");
+#else
+    cmd.append("-lm");
 #endif
+
     if (!run_command_sync(cmd)) return false;
 #endif//BUILD_NATIVE
 
 #ifdef  BUILD_WEB
     cmd.count = 0;
-    cmd.append(CC, "-std=c++17", NCZ_RCFLAGS, ENTRY_POINT, "-Os",
+    cmd.append("clang", "-std=c++17", NCZ_RCFLAGS, ENTRY_POINT, "-Os",
         "--target=wasm32-wasi", "--sysroot=temporary/wasi-sysroot",
         "-nodefaultlibs", "-L./temporary/wasi-sysroot/lib/",
         "-DNCZ_NO_MULTIPROCESSING",
@@ -130,7 +130,7 @@ bool build_application() {
     //       additional complexity is not worth it just to support bad text editors.
     format(&out, "<script>\n"_str);
         format(&out, "const wasm_bin = new Uint8Array(["_str);
-        for (char c : wasm_bin) print(&out, static_cast<u8>(c), ", "_str);
+        for (char c : wasm_bin) print(&out, static_cast<u8>(c), ","_str);
         format(&out, "]);\n"_str);
         if (!read_file(&out, "source/raylib/raylib.js")) return false;
     format(&out, "</script>\n"_str);

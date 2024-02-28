@@ -54,7 +54,7 @@ typedef uintptr_t   usize;
 #endif//__clang__
 
 #ifndef NCZ_CFLAGS
-#define NCZ_CFLAGS "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-fsanitize=address", "-g", "-nostdinc++", "-fno-rtti", "-fno-exceptions"
+#define NCZ_CFLAGS "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-g", "-nostdinc++", "-fno-rtti", "-fno-exceptions" /*, "-fsanitize=address"*/
 #endif//NCZ_CFLAGS
 
 #ifndef NCZ_RCFLAGS

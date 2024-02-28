@@ -41,5 +41,12 @@ build.exp
 build.ilk
 build.ilk
 *.exp
+
+output/test-application.html
+output/test-application.exe
 output/test-application
 *.wasm
+*.old
+
+!/temporary/wasi-sysroot/**/*.o
+!/temporary/wasi-sysroot/**/*.a
