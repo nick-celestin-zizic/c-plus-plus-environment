@@ -11,6 +11,7 @@ using namespace ncz;
 #define TMP_DIR     "./temporary/"
 #define ENTRY_POINT "./source/main.cpp"
 
+
 // you can bootstrap the build system with this command:
 // WINDOWS: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -ldbghelp -Xlinker /INCREMENTAL:NO -Xlinker /NOLOGO -Xlinker /NOIMPLIB -Xlinker /NODEFAULTLIB:msvcrt.lib -o build.exe build.cpp
 // POSIX: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address -g -nostdinc++ -fno-rtti -fno-exceptions -o build.out build.cpp
@@ -112,7 +113,7 @@ bool build_application() {
 
 #ifdef  BUILD_WEB
     cmd.count = 0;
-    cmd.append("clang", "-std=c++17", NCZ_RCFLAGS, ENTRY_POINT, "-Os",
+    cmd.append("clang", NCZ_RCFLAGS, ENTRY_POINT, "-Os",
         "--target=wasm32-wasi", "--sysroot=temporary/wasi-sysroot",
         "-nodefaultlibs", "-L./temporary/wasi-sysroot/lib/",
         "-DNCZ_NO_MULTIPROCESSING",
