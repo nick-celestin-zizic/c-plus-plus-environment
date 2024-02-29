@@ -64,7 +64,7 @@ typedef uintptr_t   usize;
 #ifndef NCZ_LDFLAGS
 #ifdef _WIN32
 // we need this on windows to get nice stack traces
-#define NCZ_LDFLAGS "-ldbghelp",   \
+#define NCZ_LDFLAGS "-D_CRT_SECURE_NO_WARNINGS", "-ldbghelp", \
     "-Xlinker", "/INCREMENTAL:NO", \
     "-Xlinker", "/NOLOGO",         \
     "-Xlinker", "/NOIMPLIB",       \
@@ -120,11 +120,6 @@ namespace ncz {
     void* resize(void* memory, usize size, usize old_size, Allocator allocator);
     void  dispose(void* memory, Allocator allocator);
     template <typename T> T* allocate(usize num = 1, Allocator allocator = {}) { return (T*)allocate(sizeof(T) * num, allocator); }
-    template <typename T> T* make(Allocator allocator) {
-        auto mem = (T*)allocate(sizeof(T), allocator);
-        *mem     = T();
-        return mem;
-    }
 
     // Page Allocator
     struct Page {

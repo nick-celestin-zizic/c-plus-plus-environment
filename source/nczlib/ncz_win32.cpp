@@ -224,7 +224,7 @@ void log_stack_trace(int skip) {
     SymCleanup(GetCurrentProcess());
 }
 
-bool needs_update(String output_path, Array<String> input_paths) {
+bool needs_update(cstr output_path, Array<cstr> input_paths) {
     String error_string {};
     u32 error_id = 0;
     #define CHECK(x, ...) if (!(x)) { \
@@ -237,7 +237,7 @@ bool needs_update(String output_path, Array<String> input_paths) {
     
     BOOL bSuccess;
     
-    HANDLE output_path_fd = CreateFile(output_path.data, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+    HANDLE output_path_fd = CreateFile(output_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
     if (output_path_fd == INVALID_HANDLE_VALUE) {
         error_id = GetLastError();
         if (error_id == 2) { // output does not yet exist, means we have to update
@@ -256,7 +256,7 @@ bool needs_update(String output_path, Array<String> input_paths) {
     CHECK(bSuccess, "Could not get time information for ", output_path);
     
     for (auto input_path : input_paths) {
-        HANDLE input_path_fd = CreateFile(input_path.data, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+        HANDLE input_path_fd = CreateFile(input_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
         CHECK(input_path_fd != INVALID_HANDLE_VALUE, "Could not open file ", input_path);
         FILETIME input_path_time;
         bSuccess = GetFileTime(input_path_fd, NULL, NULL, &input_path_time);
@@ -271,12 +271,10 @@ bool needs_update(String output_path, Array<String> input_paths) {
     #undef CHECK
 }
 
-bool rename_file(String old_path, String new_path) {
-    assert(*(old_path.data + old_path.count) == 0);
-    assert(*(new_path.data + new_path.count) == 0);
+bool rename_file(cstr old_path, cstr new_path) {
     // TODO: make these logs trace or verbose
     log_ex(Log_Level::TRACE, Log_Type::INFO, "[rename] ", old_path, " -> ", new_path);
-     if (!MoveFileEx(old_path.data, new_path.data, MOVEFILE_REPLACE_EXISTING)) {
+     if (!MoveFileEx(old_path, new_path, MOVEFILE_REPLACE_EXISTING)) {
         // log_error("Could not rename "_str, old_path, ": "_str, os_get_error());
         // return false;
         

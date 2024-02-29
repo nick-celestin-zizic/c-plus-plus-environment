@@ -19,6 +19,14 @@ using namespace ncz;
 bool build_dependencies();
 bool build_application();
 
+#ifdef _WIN32
+#define EXE OUT_DIR PROJECT_NAME ".exe"
+#define DEBUGGER "remedybg"
+#else
+#define EXE OUT_DIR PROJECT_NAME
+#define DEBUGGER "gf"
+#endif // _WIN32
+
 int main(int argc, cstr *argv) {
     NCZ_CPP_FILE_IS_SCRIPT(argc, argv);
     context.logger.labels.push("build");
@@ -28,14 +36,10 @@ int main(int argc, cstr *argv) {
     #endif//BUILD_NATIVE
     assert(build_application());
     
+    // run_cmd(DEBUGGER, EXE);
     return 0;
 }
 
-#ifdef _WIN32
-#define EXE OUT_DIR PROJECT_NAME ".exe"
-#else
-#define EXE OUT_DIR PROJECT_NAME
-#endif // _WIN32
 
 static const cstr raylib_compilation_unit_names[] = {
     "raudio", "rcore", "rglfw", "rmodels", "rshapes", "rtext", "rtextures", "utils"
