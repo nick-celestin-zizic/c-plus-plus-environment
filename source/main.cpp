@@ -101,31 +101,43 @@ void run_frame() {
 }
 
 int main(void) {
+    #ifndef WEB_BUILD // TODO: just add this functionality to raylib.js
+    rl::SetTraceLogCallback(ncz::raylib_trace_log_adapter);
+    #endif//WEB_BUILD
     rl::InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "wow wasm with raylib so cool");
     #ifdef  WEB_BUILD
     raylib_js_set_entry(run_frame);
     #else
-    rl::SetTraceLogCallback(ncz::raylib_trace_log_adapter);
     while (!rl::WindowShouldClose()) run_frame();
     rl::CloseTheWindow();
     #endif//WEB_BUILD
     
-    // Array       <type>            ();
-    // Fixed_Array <type, len>       ();
-    // List        <type>            (allocator);
-    // Fixed_List  <type, capacity>  ();
-    // Array_List  <type, array_len> (allocator);
-    // Cache       <type>            (allocator);
-    // Set         <type>            (allocator);
-    // Map         <ktype, vtype>    (allocator);
+    // ncz_context.hpp
+    // Memory Primitives:
+        // Array       <type>            ();
+        // Fixed_Array <type, len>       ();
+        // Fixed_List  <type, capacity>  (); 
+    // Allocator:
+        // allocate
+        // dispose
+        // resize
     
+    // ncz_os.hpp
+    // filesystem
+    // multiprocessing
+    // memory page stuff + unmapping allocator
+    // actually building c++ code
+    
+    // ncz_ds.hpp
+    // List        <type>             (allocator);
+    // Array_List  <type, array_len>  (allocator);
+    // Set         <type>             (allocator);
+    // Map         <ktype, vtype>     (allocator);
+    // Cache       <type>             (); // uses os page allocator
+    
+    // ncz_arena.hpp
     // Arena       <>         (align, block_size, allocator);
-    // Flat_Arena  <>         (align, reserve);
+    // Flat_Arena  <>         (align, capacity);
     // Fixed_Arena <capacity> (align);
     
-    // allocate
-    // dispose
-    // resize
-    // create_heap
-    // destroy_heap
 }
