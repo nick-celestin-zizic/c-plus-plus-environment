@@ -49,6 +49,7 @@ void run_frame() {
         ncz::clamp(&circle_position.y, circle_radius, h - circle_radius);
 
         if (rl::CheckCollisionCircleRec(circle_position, circle_radius, paddle)) {
+            log("DING! ", paddle);
             if (circle_position.y < paddle.y
             &&  circle_position.y > paddle.y - circle_radius) {
                 circle_position.y = paddle.y - circle_radius;
@@ -101,16 +102,16 @@ void run_frame() {
 }
 
 int main(void) {
-    #ifndef WEB_BUILD // TODO: just add this functionality to raylib.js
+    #ifndef PLATFORM_WEB // TODO: just add this functionality to raylib.js
     rl::SetTraceLogCallback(ncz::raylib_trace_log_adapter);
-    #endif//WEB_BUILD
+    #endif//PLATFORM_WEB
     rl::InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "wow wasm with raylib so cool");
-    #ifdef  WEB_BUILD
+    #ifdef  PLATFORM_WEB
     raylib_js_set_entry(run_frame);
     #else
     while (!rl::WindowShouldClose()) run_frame();
     rl::CloseTheWindow();
-    #endif//WEB_BUILD
+    #endif//PLATFORM_WEB
     
     // ncz_context.hpp
     // Memory Primitives:

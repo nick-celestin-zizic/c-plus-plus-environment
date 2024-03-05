@@ -32,7 +32,7 @@ namespace ncz {
 // procedure that is not implemented in raylib.js, you can either
 // paste the implementation from the c library below, or you will
 // have to implement it in javascript if its not possible.
-#ifdef  WEB_BUILD
+#ifdef  PLATFORM_WEB
 extern "C" {
 void raylib_js_set_entry(void (*entry)(void));
 bool CheckCollisionCircleRec(rl::Vector2 center, float radius, rl::Rectangle rec)
@@ -94,4 +94,4 @@ rl::Color ColorFromHSV(float hue, float saturation, float value)
     return color;
 }
 }
-#endif
+#endif//PLATFORM_WEB

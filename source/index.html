@@ -56,32 +56,37 @@
 <body>
     <canvas id="game"></canvas>
     <script>
-const start_raylib = async (rjs) => {
-    if (rjs.wasm !== undefined) {
-        console.error("The game is already running. Please stop() it first.");
-        return;
-    }
+let rl = new RaylibJs();
+rl.ctx = document.getElementById("game").getContext("2d");
+if (rl.ctx === null) throw new Error("Could not create 2d canvas context");
 
-    const canvas = document.getElementById("game");
-    rjs.ctx = canvas.getContext("2d");
-    if (rjs.ctx === null) {
-        throw new Error("Could not create 2d canvas context");
-    }
+const reverse = (u32) => (
+    (u32 >>> 24) | ((u32 & 0x00ff0000) >>> 8) | ((u32 & 0x0000ff00) <<  8) | ((u32 & 0x000000ff) << 24)
+) >>> 0;
+const text_decoder = new TextDecoder();
+const get_string = (buf, len) =>
+    text_decoder.decode((new Uint8Array(rl.wasm.instance.exports.memory.buffer)).subarray(buf, buf+len));
     
-    const reverse = (uint32) => (
-           (uint32 >>> 24)               |
-           ((uint32 & 0x00ff0000) >>> 8) |
-           ((uint32 & 0x0000ff00) <<  8) |
-           ((uint32 & 0x000000ff) << 24)
-    ) >>> 0;
-    const text_decoder = new TextDecoder();
-    const get_string   = (buf, len) => text_decoder.decode((new Uint8Array(rjs.wasm.instance.exports.memory.buffer)).subarray(buf, buf+len));
-    
-    console.log(wasm_bin);
-    rjs.wasm = await WebAssembly.instantiate(wasm_bin, {
-        env: make_environment(rjs),
-        wasi_snapshot_preview1: make_environment({
+WebAssembly.instantiate(wasm_binary, {
+    env: make_environment(rl),
+    wasi_snapshot_preview1: make_environment({
         proc_exit: (exit_code) => { throw new Error(`exit(${exit_code})`); },
+        fd_fdstat_get: (fd, stat_ptr) => {
+            switch (fd) {
+            case 1: break; case 2: break;
+            default: { throw new Error('we only support stdout and stderr for now'); }
+            }
+            const view = new DataView(rl.wasm.instance.exports.memory.buffer);
+            const fs_filetype_ptr          = stat_ptr+0;
+            const fs_flags_ptr             = stat_ptr+2;
+            const fs_rights_base_ptr       = stat_ptr+8;
+            const fs_rights_inheriting_ptr = stat_ptr+16;
+            view.setUint8(fs_filetype_ptr, 2);
+            view.setUint16(fs_flags_ptr, 0);
+            view.setBigUint64(fs_rights_base_ptr, 0n);
+            view.setBigUint64(fs_rights_inheriting_ptr, 0n);
+            return 0;
+        },
         fd_write: (fd, io_vecs_ptr, io_vecs_len, bytes_written_ptr) => {
             let logger;
             switch (fd) {
@@ -90,7 +95,7 @@ const start_raylib = async (rjs) => {
             default: { throw new Error('we only support stdout and stderr for now'); }
             }
             
-            const view  = new DataView(rjs.wasm.instance.exports.memory.buffer);
+            const view  = new DataView(rl.wasm.instance.exports.memory.buffer);
             let written = 0;
             for (let i = 0;  i < io_vecs_len; i++) {
                 const vec_ptr = io_vecs_ptr + (i*8);
@@ -102,48 +107,41 @@ const start_raylib = async (rjs) => {
                 }
             }
             view.setUint32(bytes_written_ptr, reverse(written));
+            return 0;
         }
-        })
-    });
-
-    const keyDown = (e) => {
-        rjs.currentPressedKeyState.add(glfwKeyMapping[e.code]);
-    };
-    const keyUp = (e) => {
-        rjs.currentPressedKeyState.delete(glfwKeyMapping[e.code]);
-    };
-    const wheelMove = (e) => {
-      rjs.currentMouseWheelMoveState = Math.sign(-e.deltaY);
-    };
-    const mouseMove = (e) => {
-        rjs.currentMousePosition = {x: e.clientX, y: e.clientY};
-    };
+    })
+}).then((wasm) => {
+    rl.wasm = wasm;
+    const keyDown   = (e) => { rl.currentPressedKeyState.add(glfwKeyMapping[e.code]);    };
+    const keyUp     = (e) => { rl.currentPressedKeyState.delete(glfwKeyMapping[e.code]); };
+    const wheelMove = (e) => { rl.currentMouseWheelMoveState = Math.sign(-e.deltaY);     };
+    const mouseMove = (e) => { rl.currentMousePosition = {x: e.clientX, y: e.clientY};   };
     window.addEventListener("keydown", keyDown);
     window.addEventListener("keyup", keyUp);
     window.addEventListener("wheel", wheelMove);
     window.addEventListener("mousemove", mouseMove);
 
-    rjs.wasm.instance.exports.main();
+    rl.wasm.instance.exports.main();
     const next = (timestamp) => {
-        if (rjs.quit) {
-            rjs.ctx.clearRect(0, 0, rjs.ctx.canvas.width, rjs.ctx.canvas.height);
+        if (rl.quit) {
+            rl.ctx.clearRect(0, 0, rl.ctx.canvas.width, rl.ctx.canvas.height);
             window.removeEventListener("keydown", keyDown);
-            rjs = new RaylibJs();
+            window.removeEventListener("keyup", keyUp);
+            window.removeEventListener("wheel", wheelMove);
+            window.removeEventListener("mousemove", mouseMove);
+            rl = new RaylibJs();
             return;
         }
-        rjs.dt = (timestamp - rjs.previous)/1000.0;
-        rjs.previous = timestamp;
-        rjs.entryFunction();
+        rl.dt = (timestamp - rl.previous)/1000.0;
+        rl.previous = timestamp;
+        rl.entryFunction();
         window.requestAnimationFrame(next);
     };
     window.requestAnimationFrame((timestamp) => {
-        rjs.previous = timestamp;
+        rl.previous = timestamp;
         window.requestAnimationFrame(next);
     });
-}
-        rl = new RaylibJs();
-        start_raylib(rl);
-        console.log(rl);
+});
     </script>
 </body>
 </html>

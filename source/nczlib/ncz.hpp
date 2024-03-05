@@ -26,7 +26,6 @@ typedef int64_t     s64;
 typedef uint64_t    u64;
 typedef uintptr_t   usize;
 
-
 #define assert(cond) if (!(cond)) ::ncz::failed_assert(#cond, ::ncz::Source_Location {__FILE__, __LINE__})
 
 #pragma region ModuleParameters
@@ -39,12 +38,23 @@ typedef uintptr_t   usize;
 #pragma endregion
 
 #pragma region FunkyMacros
+#define NCZ_HERE ::ncz::Source_Location {__FILE__, __LINE__}
 #define NCZ_TEMP ::ncz::Allocator { ::ncz::pool_allocator_proc, &::ncz::context.temporary_storage }
-#define NCZ_CONCAT_1(x, y) x##y
-#define NCZ_CONCAT(x, y)  NCZ_CONCAT_1(x, y)
+
+// TODO: document these funky macros
+#define NCZ_CONCAT(x, y)  NCZ__CONCAT_(x, y)
 #define NCZ_GENSYM(x)     NCZ_CONCAT(x, __COUNTER__)
 #define NCZ_DEFER(code) ::ncz::Defer NCZ_GENSYM(_defer_) {[&](){code;}}
-#define NCZ_HERE ::ncz::Source_Location {__FILE__, __LINE__}
+#define NCZ_PUSH_STATE(variable, value) NCZ__PUSH_STATE_((variable), (value), NCZ_GENSYM(_pushed_variable_))
+#define NCZ_SAVE_STATE(variable) NCZ__SAVE_STATE_((variable), NCZ_GENSYM(_saved_variable_))
+#define NCZ_STATIC_ARRAY_LITERAL(type, name, ...)            \
+static constexpr const type name_##data[] = { __VA_ARGS__ }; \
+static constexpr const Array<type> name = { (type*)name_##data, sizeof(name_##data)/sizeof(name_##data[0]) }
+
+// These are helper macros and should not be used
+#define NCZ__CONCAT_(x, y) x##y
+#define NCZ__PUSH_STATE_(var, val, old) auto old = (var); (var) = (val); NCZ_DEFER((var) = old)
+#define NCZ__SAVE_STATE_(var, old) auto old = (var); NCZ_DEFER((var) = old)
 
 #define trace(...) log(::ncz::Source_Location {__FILE__, __LINE__}, ": ", __VA_ARGS__)
 #define trace_error(...)  log_ex(Log_Level::NORMAL,  Log_Type::ERRO, ::ncz::Source_Location {__FILE__, __LINE__}, ": ", __VA_ARGS__)
@@ -54,7 +64,7 @@ typedef uintptr_t   usize;
 #endif//__clang__
 
 #ifndef NCZ_CFLAGS
-#define NCZ_CFLAGS "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-g", "-nostdinc++", "-fno-rtti", "-fno-exceptions" /*, "-fsanitize=address"*/
+#define NCZ_CFLAGS "-std=c++17", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-g", "-nostdinc++", "-fno-rtti", "-fno-exceptions"
 #endif//NCZ_CFLAGS
 
 #ifndef NCZ_RCFLAGS
@@ -1075,7 +1085,7 @@ namespace ncz {
             mark.offset = (memory + bytes) - current_block_data;
             return memory;
         } else {
-            auto new_block = (void**)allocate(sizeof(void*)+bytes+ARENA_ALIGN-1);
+            auto new_block = (void**)allocate(sizeof(void*)+bytes+ARENA_ALIGN-1, block_allocator);
             *new_block = oversized;
             oversized = new_block;
             return &new_block[1];
