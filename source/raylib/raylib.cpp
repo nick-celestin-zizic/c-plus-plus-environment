@@ -3,13 +3,13 @@ namespace rl {
 }
 
 namespace ncz {
-    void format(String_Builder *sb, rl::Vector2 v) {
-        print(sb, "(", v.x, ", ", v.y, ")");
+    void Write(String_Builder *sb, rl::Vector2 v) {
+        Print(sb, "(", v.x, ", ", v.y, ")");
     }
-    void format(String_Builder *sb, rl::Rectangle r) {
-        print(sb, "{x: ", r.x, ", y: ", r.y, ", w: ", r.width, ", h: ", r.height, "}");
+    void Write(String_Builder *sb, rl::Rectangle r) {
+        Print(sb, "{x: ", r.x, ", y: ", r.y, ", w: ", r.width, ", h: ", r.height, "}");
     }
-    void raylib_trace_log_adapter(int log_level, cstr text, void* args) {
+    void RaylibTraceLogAdapter(int log_level, cstr text, void* args) {
         Log_Type type;
         if      (log_level <= rl::LOG_INFO)    type = Log_Type::INFO;
         else if (log_level == rl::LOG_WARNING) type = Log_Type::WARN;
@@ -21,9 +21,8 @@ namespace ncz {
         #else
         vsnprintf(buf, 1024, text, *(va_list*)args);
         #endif
-        context.logger.labels.push("raylib");
-        log_ex(Log_Level::TRACE, type, buf);
-        context.logger.labels.pop();
+        NCZ_PUSH_STATE(context.logger.label, "raylib");
+        LogEx(Log_Level::TRACE, type, buf);
     }
 }
 

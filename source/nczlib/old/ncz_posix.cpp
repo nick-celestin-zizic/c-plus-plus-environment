@@ -31,8 +31,8 @@ u8* os_extend_commited_pages(u8* first_uncommitted_page, u8* end) {
     return first_uncommitted_page + size;
 }
 
-void crt_logger_proc(String message, Log_Level level, Log_Type type, void* logger_data) {
-    (void) logger_data;
+void crtLoggerProc(String message, Log_Level level, Log_Type type, void* userData) {
+    (void) userData;
     (void) level;
     
     #define ANSI_COLOR_RED     "\x1b[31m"
@@ -51,6 +51,10 @@ void crt_logger_proc(String message, Log_Level level, Log_Type type, void* logge
         fprintf(sink, ANSI_COLOR_YELLOW "%s" ANSI_COLOR_RESET, message.data);
         break;
     }
+    
+    #undef ANSI_COLOR_RED    
+    #undef ANSI_COLOR_YELLOW 
+    #undef ANSI_COLOR_RESET 
 }
 
 #ifndef NCZ_NO_MULTIPROCESSING
