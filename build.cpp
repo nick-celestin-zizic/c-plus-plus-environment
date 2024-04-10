@@ -7,10 +7,10 @@ using namespace ncz;
 
 #define PROJECT_NAME "test-application"
 
-#define OUT_DIR     "./output/"
-#define TMP_DIR     "./temporary/"
-#define SRC_DIR     "./source/"
-#define ENTRY_POINT "./source/main.cpp"
+#define OUT_DIR     "output"
+#define TMP_DIR     "temporary"
+#define SRC_DIR     "source"
+#define ENTRY_POINT "source/main.cpp"
 
 // you can bootstrap the build system with this command:
 // WINDOWS: clang -std=c++17 -Wall -Wextra -Wpedantic -Werror -g -nostdinc++ -fno-rtti -fno-exceptions -ldbghelp -Xlinker /INCREMENTAL:NO -Xlinker /NOLOGO -Xlinker /NOIMPLIB -Xlinker /NODEFAULTLIB:msvcrt.lib -o build.exe build.cpp
@@ -21,13 +21,13 @@ bool BuildDependencies();
 bool BuildApplication();
 
 #ifdef _WIN32
-#define NATIVE_EXE OUT_DIR PROJECT_NAME ".exe"
+#define NATIVE_EXE OUT_DIR NCZ_PATH_SEP PROJECT_NAME ".exe"
 #define DEBUGGER "remedybg"
 #else
-#define NATIVE_EXE OUT_DIR PROJECT_NAME
+#define NATIVE_EXE OUT_DIR NCZ_PATH_SEP PROJECT_NAME
 #define DEBUGGER "gf"
 #endif // _WIN32
-#define WEB_EXE OUT_DIR PROJECT_NAME ".html"
+#define WEB_EXE OUT_DIR NCZ_PATH_SEP PROJECT_NAME ".html"
 
 int main(int argc, cstr *argv) {
     NCZ_CPP_FILE_IS_SCRIPT(argc, argv);
@@ -59,9 +59,9 @@ bool BuildDependencies() {
     
     Append(&ar, "llvm-ar", "crs",
         #ifndef _WIN32
-        TMP_DIR "libraylib.a"
+        TMP_DIR NCZ_PATH_SEP "libraylib.a"
         #else
-        TMP_DIR "raylib.lib"
+        TMP_DIR NCZ_PATH_SEP "raylib.lib"
         #endif//_WIN32
     );
     
@@ -70,13 +70,14 @@ bool BuildDependencies() {
     for (cstr unit: raylib_units) {
         inputPath.count = 0;
         Print(&inputPath, "./source/raylib/"_str, unit, ".c\0"_str);
-        cstr objectFile = SPrint(TMP_DIR, unit, ".o"_str).data;
+        --inputPath.count; // so that AsCstr()'s assertion does not fail;
+        
+        cstr objectFile = SPrint(TMP_DIR NCZ_PATH_SEP, unit, ".o"_str).data;
         Push(&ar, objectFile);
         
         if (!NeedsUpdate(objectFile, inputPath.data)) continue;
         
         Append(&cc, AsCstr(inputPath), "-o", objectFile);
-        Append(&cc, static_cast<cstr>(inputPath.data), "-o", objectFile);
             auto [proc, ok] = RunCommandAsync(cc);
             if (!ok) return false;
             Push(&procs, proc);
@@ -107,7 +108,7 @@ bool BuildApplication() {
             "clang", NCZ_CFLAGS, "-fsanitize=address",
             ENTRY_POINT, "-o", NATIVE_EXE, "-DPLATFORM_DESKTOP",
             "-I./source/raylib/external/glfw/include",
-            "-L" TMP_DIR, "-lraylib"
+            "-L" TMP_DIR NCZ_PATH_SEP, "-lraylib"
         );
     #ifdef _WIN32
         Append(&cmd,
@@ -129,7 +130,7 @@ bool BuildApplication() {
         Log("Building web");
         cmd.count = 0;
         Append(&cmd, "clang", NCZ_CSTD, "-Os",
-                    ENTRY_POINT, "-o", TMP_DIR PROJECT_NAME ".wasm",
+                    ENTRY_POINT, "-o", TMP_DIR NCZ_PATH_SEP PROJECT_NAME ".wasm",
                     "--target=wasm32-wasi", "--sysroot=temporary/wasi-sysroot",
                     "-nodefaultlibs", "-lc", "-lwasi-emulated-mman",
                     "-DPLATFORM_WEB", "-DNCZ_NO_OS", "-D_WASI_EMULATED_MMAN",
@@ -137,7 +138,7 @@ bool BuildApplication() {
         if (!RunCommandSync(cmd)) return false;
         
         String_Builder out {};
-        auto [wasm_bin, ok] = ReadFile(TMP_DIR PROJECT_NAME ".wasm");
+        auto [wasm_bin, ok] = ReadFile(TMP_DIR NCZ_PATH_SEP PROJECT_NAME ".wasm");
         if (!ok) return false;
         
         // embed raylib and wasm application into html

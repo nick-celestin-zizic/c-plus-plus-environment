@@ -11,7 +11,13 @@
 
 #ifndef NCZ_NO_OS
 #ifdef _WIN32
-
+#define WIN32_LEAN_AND_MEAN
+#pragma comment(lib, "dbghelp")
+#pragma warning(disable : 4996)
+#include <windows.h>
+#include <direct.h>
+#include <shellapi.h>
+#include <dbghelp.h>
 #else // POSIX
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -22,7 +28,7 @@
 
 namespace ncz {
 // macros
-#define NCZ_HERE ::ncz::Source_Location {__FILE__, __LINE__}
+#define NCZ_HERE ::ncz::Source_Location {__FILE__, __LINE__-1}
 #define NCZ_TEMP ::ncz::Allocator { ::ncz::PoolAllocatorProc, &::ncz::context.temporaryStorage }
 
 // TODO: document these funky macros
@@ -213,6 +219,7 @@ String TPrint(Args ... args);
 // Assertions and Stack Traces
 #define NCZ_ASSERT(cond) if (!(cond)) ::ncz::HandleFailedAssertion(#cond, NCZ_HERE)
 void HandleFailedAssertion(cstr repr, Source_Location loc);
+void LogStackTrace(usize skip = 0);
 
 // C++17 Compiler
 #ifndef NCZ_NO_CC
@@ -253,7 +260,7 @@ enum class File_Type { FILE, FOLDER, LINK, OTHER };
 Result<Array<cstr>> ReadFolder(cstr parent);
 Result<File_Type> GetFileType(cstr path);
 // template <typename F> // F :: (String path, File_Type type) -> bool 
-template <typename F> bool TraverseFolder(cstr path, F visit_proc);
+template <typename F> bool TraverseFolder(cstr path, F visitProc);
 
 
 }// namespace ncz
@@ -381,9 +388,9 @@ void CrtLoggerProc(String message, Log_Level level, Log_Type type, void* userDat
     (void) userData;
     (void) level;
     
-    #define ANSI_COLOR_RED     "\x1b[31m"
-    #define ANSI_COLOR_YELLOW  "\x1b[33m"
-    #define ANSI_COLOR_RESET   "\x1b[0m"
+    // #define ANSI_COLOR_RED     "\x1b[31m"
+    // #define ANSI_COLOR_YELLOW  "\x1b[33m"
+    // #define ANSI_COLOR_RESET   "\x1b[0m"
 
     auto sink = type == Log_Type::ERRO ? stderr : stdout;
     switch (type) {
@@ -391,16 +398,16 @@ void CrtLoggerProc(String message, Log_Level level, Log_Type type, void* userDat
         fwrite(message.data, 1, message.count, sink);
         break;
     case Log_Type::ERRO:
-        fprintf(sink, ANSI_COLOR_RED "%s" ANSI_COLOR_RESET, message.data);
+        fprintf(sink, /*ANSI_COLOR_RED*/ "%s" /*ANSI_COLOR_RESET*/, message.data);
         break;
     case Log_Type::WARN:
-        fprintf(sink, ANSI_COLOR_YELLOW "%s" ANSI_COLOR_RESET, message.data);
+        fprintf(sink, /*ANSI_COLOR_YELLOW*/ "%s" /*ANSI_COLOR_RESET*/, message.data);
         break;
     }
     
-    #undef ANSI_COLOR_RED    
-    #undef ANSI_COLOR_YELLOW 
-    #undef ANSI_COLOR_RESET 
+    // #undef ANSI_COLOR_RED    
+    // #undef ANSI_COLOR_YELLOW 
+    // #undef ANSI_COLOR_RESET 
 }
 
 void *Allocate(usize size, Allocator allocator) {
@@ -520,8 +527,9 @@ void HandleFailedAssertion(cstr repr, Source_Location loc) {
     // int z = 0;
     // *(*(int**)&z) = 12;.
     LogError(loc, " Assertion `"_str, repr, "` Failed!"_str);
+    LogStackTrace(2);
     // TODO: stack trace
-    // exit(1);
+    exit(1);
 }
 
 #ifndef NCZ_NO_CC
@@ -563,7 +571,9 @@ bool Wait(Array<Process> procs) {
     return ok;
 }
 
-bool NeedsUpdate(cstr outputPath, cstr inputPath) { return NeedsUpdate(outputPath, {1, &inputPath}); }
+bool NeedsUpdate(cstr outputPath, cstr inputPath) {
+    return NeedsUpdate(outputPath, {1, &inputPath});
+}
 
 Result<String> ReadFile(cstr path) {
     String_Builder sb {};
@@ -572,7 +582,391 @@ Result<String> ReadFile(cstr path) {
 }
 
 #ifndef NCZ_NO_OS
+
+bool WriteFile(cstr path, String data) {
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        LogError("Could not open ", path, ": ", strerror(errno));
+        return false;
+    }
+    NCZ_DEFER(fclose(f));
+    
+    char *buf = data.data;
+    int  size = data.count;
+    int error = 0;
+    while (size > 0) {
+        usize n = fwrite(buf, 1, size, f);
+        error   = ferror(f);
+        if (error) {
+            LogError("Could not write data to ", path, ": ", strerror(error));
+            return false;
+        }
+        size -= n;
+        buf  += n;
+    }
+    
+    return true;
+}
+
+bool ReadFile(String_Builder *stream, cstr path) {
+    #define CHECK(x, e) if (x) {                                 \
+    LogError("Could not read file ", path, ": ", strerror((e))); \
+    return false;                                                \
+    }
+    
+    FILE *f = fopen(path, "rb");
+    CHECK(f == NULL, errno);
+    NCZ_DEFER(fclose(f));
+    CHECK(fseek(f, 0, SEEK_END) < 0, errno);
+    
+    long m = ftell(f);
+    CHECK(m < 0, errno);
+    CHECK(fseek(f, 0, SEEK_SET) < 0, errno);
+
+    usize newCount = stream->count + m;
+    if (newCount > stream->capacity) {
+        stream->data     = static_cast<char*>(Resize(stream->data, newCount, stream->count));
+        stream->capacity = newCount;
+    }
+
+    fread(stream->data + stream->count, m, 1, f);
+    int err = ferror(f);
+    CHECK(err, err);
+    stream->count = newCount;
+    
+    return true;
+    #undef CHECK
+}
+
 #ifdef _WIN32
+// Stack Trace
+void LogStackTrace(usize skip) {
+    // Initialize symbols
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(GetCurrentProcess(), NULL, TRUE);
+
+    // Get the current context
+    CONTEXT context;
+    RtlCaptureContext(&context);
+
+    STACKFRAME64 stackFrame;
+    memset(&stackFrame, 0, sizeof(STACKFRAME64));
+
+    DWORD machineType;
+#ifdef _M_IX86
+    machineType = IMAGE_FILE_MACHINE_I386;
+    stackFrame.AddrPC.Offset = context.Eip;
+    stackFrame.AddrPC.Mode = AddrModeFlat;
+    stackFrame.AddrFrame.Offset = context.Ebp;
+    stackFrame.AddrFrame.Mode = AddrModeFlat;
+    stackFrame.AddrStack.Offset = context.Esp;
+    stackFrame.AddrStack.Mode = AddrModeFlat;
+#elif _M_X64
+    machineType = IMAGE_FILE_MACHINE_AMD64;
+    stackFrame.AddrPC.Offset = context.Rip;
+    stackFrame.AddrPC.Mode = AddrModeFlat;
+    stackFrame.AddrFrame.Offset = context.Rsp;
+    stackFrame.AddrFrame.Mode = AddrModeFlat;
+    stackFrame.AddrStack.Offset = context.Rsp;
+    stackFrame.AddrStack.Mode = AddrModeFlat;
+#endif
+    
+    // TODO: Pool constructor
+    // auto mark = ::ncz::context.temporary_storage.mark;
+    // NCZ_DEFER(::ncz::context.temporary_storage.mark = mark);
+    
+    
+    String_Builder sb{};//(NCZ_TEMP);
+    sb.allocator = NCZ_TEMP;
+    Write(&sb, "Stack Trace:\n"_str);
+    
+    // Walk the stack
+    while (StackWalk64(machineType, GetCurrentProcess(), GetCurrentThread(), &stackFrame, &context, NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL)) {
+        if (skip--) continue;
+        
+        DWORD64 displacement = 0;
+        const int bufferSize = 1024;
+        char buffer[sizeof(SYMBOL_INFO) + bufferSize] = { 0 };
+        PSYMBOL_INFO symbol = (PSYMBOL_INFO)buffer;
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = bufferSize - sizeof(SYMBOL_INFO);
+
+        // Get symbol information
+        if (SymFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, &displacement, symbol)) {
+            IMAGEHLP_LINE64 line;
+            DWORD lineDisplacement;
+            line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            // Get line information
+            if (SymGetLineFromAddr64(GetCurrentProcess(), stackFrame.AddrPC.Offset, &lineDisplacement, &line)) {
+                Print(&sb, line.FileName, ":", (u64) line.LineNumber-1, ": ");
+            } else {
+                Print(&sb, "unknown: ");
+            }
+            Print(&sb, symbol->Name, "\n");
+        } else {
+            Print(&sb, "unknown:\n");
+        }
+        
+        if (strcmp(symbol->Name, "main") == 0) break;
+    }
+    
+    LogEx(Log_Level::TRACE, Log_Type::INFO, sb);
+    
+    // Cleanup
+    SymCleanup(GetCurrentProcess());
+}
+
+// Multiprocessing
+bool Wait(Process proc) {
+    if (!proc) return false;
+    
+    // String_Builder output(NCZ_TEMP);
+    // DWORD bytesRead;
+    // CHAR buffer[4096];
+    // while (ReadFile(proc.output, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
+    //     printf("read %lu\n", bytesRead);
+    //     buffer[bytesRead] = '\0';
+    //     output.append(Array<char> { buffer, bytesRead });
+    // }
+    // log(Array<char>{output.data, output.count});
+    
+    DWORD result = WaitForSingleObject((HANDLE)proc, INFINITE);
+    
+    if (result == WAIT_FAILED) {
+        LogError("could not wait on child process: ", (u64) GetLastError());
+        return false;
+    }
+
+    DWORD exit_status;
+    if (!GetExitCodeProcess((HANDLE)proc, &exit_status)) {
+        LogError("could not get process exit code: ", (u64) GetLastError());
+        return false;
+    }
+
+    
+    if (exit_status != 0) {
+        
+        LogError("command exited with exit code ", (u64) exit_status);
+        return false;
+    }
+    
+    
+
+    CloseHandle((HANDLE)proc);
+
+    return true;
+}
+
+Result<Process> RunCommandAsync(Array<cstr> args, bool trace) {
+
+    // // Create a pipe to capture the process's output
+    // HANDLE hRead, hWrite;
+    // SECURITY_ATTRIBUTES sa;
+    // sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    // sa.lpSecurityDescriptor = NULL;
+    // sa.bInheritHandle = TRUE;
+    // if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+    //     LogError("CreatePipe failed: ", (u64) GetLastError());
+    //     return {};
+    // }
+    
+    // https://docs.microsoft.com/en-us/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output
+    
+    STARTUPINFO siStartInfo;
+    ZeroMemory(&siStartInfo, sizeof(siStartInfo));
+    siStartInfo.cb = sizeof(STARTUPINFO);
+    // NOTE: theoretically setting NULL to std handles should not be a problem
+    // https://docs.microsoft.com/en-us/windows/console/getstdhandle?redirectedfrom=MSDN#attachdetach-behavior
+    // TODO: check for errors in GetStdHandle
+    siStartInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    siStartInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    siStartInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+    
+    PROCESS_INFORMATION piProcInfo;
+    ZeroMemory(&piProcInfo, sizeof(PROCESS_INFORMATION));
+    
+    // TODO: Pool constructor
+    // auto mark = context.temporaryStorage.mark;
+        String_Builder sb{};//(NCZ_TEMP);
+        sb.allocator = NCZ_TEMP;
+        for (auto* it = args.data; it != args.data + args.count; it++) {
+            if (it != args.data) Push(&sb, ' ');
+            if (!strchr(*it, ' ')) {
+                Write(&sb, *it);
+            } else {
+                Push(&sb, '\"');
+                Write(&sb, *it);
+                Push(&sb, '\"');
+            }
+        }
+        Push(&sb, '\0');
+        if (trace) LogInfo(sb.data);
+        BOOL bSuccess = CreateProcessA(NULL, sb.data, NULL, NULL, TRUE, 0, NULL, NULL, &siStartInfo, &piProcInfo);
+    // context.temporaryStorage.mark = mark;
+    
+    if (!bSuccess) {
+        LogError("Could not create child process: ", (u64) GetLastError());
+        return {};
+    }
+    
+    CloseHandle(piProcInfo.hThread);
+    return (u64)piProcInfo.hProcess;
+}
+
+
+// Working With Files
+bool RenameFile(cstr old_path, cstr new_path) {
+    // TODO: make these logs trace or verbose
+    LogEx(Log_Level::TRACE, Log_Type::INFO, "[rename] ", old_path, " -> ", new_path);
+     if (!MoveFileEx(old_path, new_path, MOVEFILE_REPLACE_EXISTING)) {
+        // LogError("Could not rename "_str, old_path, ": "_str, os_get_error());
+        // return false;
+        
+        char buf[256];
+        memset(buf, 0, sizeof(buf));
+        FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                       NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), 
+                       buf, (sizeof(buf) / sizeof(char)), NULL);
+        
+        String str { strlen(buf), buf };
+
+        if (str[str.count-1] == '\n') str.count -= 1;
+        LogEx(Log_Level::NORMAL, Log_Type::ERRO, "Could not rename ", old_path, ": ", str);
+        return false;
+    }
+    return true;
+}
+
+bool NeedsUpdate(cstr output_path, Array<cstr> input_paths) {
+    String error_string {};
+    u32 error_id = 0;
+    #define CHECK(x, ...) if (!(x)) { \
+        error_id = GetLastError();    \
+        error_string.count = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error_id, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&error_string.data, 0, NULL) - 1; \
+        LogError(/*NCZ_HERE, " ",*/ __VA_ARGS__, ": (", error_id, ") ", error_string); \
+        LocalFree(error_string.data); \
+        return false; \
+    }
+    
+    BOOL bSuccess;
+    
+    HANDLE output_path_fd = CreateFile(output_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+    if (output_path_fd == INVALID_HANDLE_VALUE) {
+        error_id = GetLastError();
+        if (error_id == 2) { // output does not yet exist, means we have to update
+            return true;
+        } else {
+            error_string.count = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error_id, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&error_string.data, 0, NULL) - 1;
+            LogError(NCZ_HERE, " ", "Could not open file ", output_path, ": (", error_id, ") ", error_string);
+            LocalFree(error_string.data);
+            return false;
+        }
+    }
+    
+    FILETIME output_path_time;
+    bSuccess = GetFileTime(output_path_fd, NULL, NULL, &output_path_time);
+    CloseHandle(output_path_fd);
+    CHECK(bSuccess, "Could not get time information for ", output_path);
+    
+    for (auto input_path : input_paths) {
+        HANDLE input_path_fd = CreateFile(input_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+        CHECK(input_path_fd != INVALID_HANDLE_VALUE, "Could not open file ", input_path);
+        FILETIME input_path_time;
+        bSuccess = GetFileTime(input_path_fd, NULL, NULL, &input_path_time);
+        CloseHandle(input_path_fd);
+        CHECK(bSuccess, "Could not get time information for ", input_path);
+    
+        // NOTE: if even a single input_path is fresher than output_path that's 100% rebuild
+        if (CompareFileTime(&input_path_time, &output_path_time) == 1) return true;
+    };
+    
+    return false;
+    #undef CHECK
+}
+
+static String GetErrorString() {
+    auto errorCode = GetLastError();
+    
+    // Returns a string in temporary storage.
+    wchar_t *lpMsgBuf;
+    bool success = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER |
+           FORMAT_MESSAGE_FROM_SYSTEM  |
+           FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, errorCode,
+        MAKELANGID(LANG_NEUTRAL,SUBLANG_DEFAULT), // Default language
+        (wchar_t*)&lpMsgBuf, 0, nullptr
+    );
+    if (!success) return ""_str;
+    NCZ_DEFER(LocalFree(lpMsgBuf));
+
+    
+    // result := Utf8.wide_to_utf8_new(lpMsgBuf,, Basic.temp);
+    auto queryResult = WideCharToMultiByte(CP_UTF8, 0,
+                                            lpMsgBuf, -1,
+                                            nullptr, 0,
+                                            nullptr, nullptr);
+    if (queryResult <= 0) return ""_str;
+
+    String name;
+    auto nameBytes = static_cast<char*>(Allocate(queryResult));
+    auto result    = WideCharToMultiByte(CP_UTF8, 0, lpMsgBuf, -1, nameBytes, queryResult, nullptr, nullptr);
+    if (result <= 0) return ""_str;
+    NCZ_ASSERT(result <= queryResult);
+    
+    name.data  = nameBytes;
+    name.count = result-1; // Returned length DOES include null character if we passed in a null-terminated string!
+    
+    usize trimmedCount = name.count;
+    for (usize i = name.count; i >= 0; --i) {
+        if (name.data[i] == '\r' || name.data[i] == '\n') trimmedCount -= 1;
+        else break;
+    }
+    
+    // Chop off the newline so that we can format this standardly. Argh.
+    return {trimmedCount, name.data};
+}
+
+Result<Array<cstr>> ReadFolder(cstr parent) {
+    NCZ_PUSH_STATE(context.allocator, NCZ_TEMP);
+    List<cstr> children {};
+    
+    // cstr search_path = Concat(parent, "\\*"); // Append wildcard to parent path
+    cstr search_path = TPrint(parent, "\\*"_str).data;
+    WIN32_FIND_DATA ffd;
+    HANDLE hFind = FindFirstFile(search_path, &ffd);
+    if (INVALID_HANDLE_VALUE == hFind) {
+        LogError("Could not open folder ", parent, ": ", GetErrorString());
+        return {};
+    }
+    NCZ_DEFER(FindClose(hFind));
+
+    do Push(&children, CopyCstr(ffd.cFileName));
+    while (FindNextFile(hFind, &ffd) != 0);
+
+    if (GetLastError() != ERROR_NO_MORE_FILES) {
+        LogError("Could not read folder ", parent, ": ", GetErrorString());
+        return {};
+    }
+
+    return children;
+}
+
+Result<File_Type> GetFileType(cstr path) {
+    WIN32_FILE_ATTRIBUTE_DATA wfad;
+    if (!GetFileAttributesEx(path, GetFileExInfoStandard, &wfad)) {
+        LogError("Could not get attributes of ", path, ": ", GetErrorString());
+        return {};
+    }
+
+    if (wfad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        return File_Type::FOLDER;
+    else if (wfad.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        return File_Type::LINK;
+    else
+        return File_Type::FILE;
+}
 
 #else // POSIX
 // Multiprocessing
@@ -674,61 +1068,6 @@ bool RenameFile(cstr oldPath, cstr newPath) {
     return true;
 }
 
-bool WriteFile(cstr path, String data) {
-    FILE *f = fopen(path, "wb");
-    if (f == NULL) {
-        LogError("Could not open ", path, ": ", strerror(errno));
-        return false;
-    }
-    NCZ_DEFER(fclose(f));
-    
-    char *buf = data.data;
-    int  size = data.count;
-    int error = 0;
-    while (size > 0) {
-        usize n = fwrite(buf, 1, size, f);
-        error   = ferror(f);
-        if (error) {
-            LogError("Could not write data to ", path, ": ", strerror(error));
-            return false;
-        }
-        size -= n;
-        buf  += n;
-    }
-    
-    return true;
-}
-
-bool ReadFile(String_Builder *stream, cstr path) {
-    #define CHECK(x, e) if (x) {                                 \
-    LogError("Could not read file ", path, ": ", strerror((e))); \
-    return false;                                                \
-    }
-    
-    FILE *f = fopen(path, "rb");
-    CHECK(f == NULL, errno);
-    NCZ_DEFER(fclose(f));
-    CHECK(fseek(f, 0, SEEK_END) < 0, errno);
-    
-    long m = ftell(f);
-    CHECK(m < 0, errno);
-    CHECK(fseek(f, 0, SEEK_SET) < 0, errno);
-
-    size_t new_count = stream->count + m;
-    if (new_count > stream->capacity) {
-        stream->data     = static_cast<char*>(Resize(stream->data, new_count, stream->count));
-        stream->capacity = new_count;
-    }
-
-    fread(stream->data + stream->count, m, 1, f);
-    int err = ferror(f);
-    CHECK(err, err);
-    stream->count = new_count;
-    
-    return true;
-    #undef CHECK
-}
-
 Result<Array<cstr>> ReadFolder(cstr parent) {
     NCZ_PUSH_STATE(context.allocator, NCZ_TEMP);
     List<cstr> children {};
@@ -771,23 +1110,32 @@ Result<File_Type> GetFileType(cstr path) {
     }
 }
 
+
+#endif//WIN32/POSIX
+
+// POSIX
+// #define NCZ_PATH_SEP '/'
+
+// WIN32
+#define NCZ_PATH_SEP "\\"
+
 template <typename F> static
-bool Visit(cstr file, F visit_proc, String_Builder *full_path, u64 *base_path_len) {
+bool Visit(cstr file, F visitProc, String_Builder *fullPath, u64 *basePathLen) {
     if ((strcmp(".", file) == 0) || (strcmp("..", file) == 0)) return true;
-    full_path->count = *base_path_len;
-    Print(full_path, file, "\0"_str);
+    fullPath->count = *basePathLen;
+    Print(fullPath, NCZ_PATH_SEP, file, "\0"_str);
     
-    auto [type, ok] = GetFileType(full_path->data);
+    auto [type, ok] = GetFileType(fullPath->data);
     if (!ok) return false;
-    ok = visit_proc(String{full_path->count-1, full_path->data}, type);
+    ok = visitProc(String{fullPath->count-1, fullPath->data}, type);
     if (!ok) return false;
     
     if (type == File_Type::FOLDER) {
-        auto [children, ok] = ReadFolder(full_path->data);
+        auto [children, ok] = ReadFolder(fullPath->data);
         if (!ok) return false;
-        (*full_path)[full_path->count-1] = '/'; // replace null terminator to make it a proper folder
-        NCZ_PUSH_STATE(*base_path_len, full_path->count); // hell yeah.....
-        for (cstr c: children) if (!Visit(c, visit_proc, full_path, base_path_len)) return false;
+        (*fullPath)[fullPath->count-1] = NCZ_PATH_SEP[0]; // replace null terminator to make it a proper folder
+        NCZ_PUSH_STATE(*basePathLen, fullPath->count); // hell yeah.....
+        for (cstr c: children) if (!Visit(c, visitProc, fullPath, basePathLen)) return false;
     }
     
     return true;
@@ -798,23 +1146,23 @@ bool Visit(cstr file, F visit_proc, String_Builder *full_path, u64 *base_path_le
 // This function Allocates all paths with temporary storage so if you want to keep
 // a path you are visiting you need to use CopyString or CopyCstr
 template <typename F>
-bool TraverseFolder(cstr path, F visit_proc) {
+bool TraverseFolder(cstr path, F visitProc) {
     Array<cstr> files;
-    String_Builder full_path {};
-    { NCZ_PUSH_STATE(context.allocator, NCZ_TEMP);
+    String_Builder fullPath {};
+    {
+        NCZ_PUSH_STATE(context.allocator, NCZ_TEMP);
         auto result = ReadFolder(path);
         if (!result.ok) return false;
         files = result.value;
-        Write(&full_path, path);
+        Write(&fullPath, path);
     }
     
-    u64 base_path_len = full_path.count;
-    for (cstr f: files) if (!Visit(f, visit_proc, &full_path, &base_path_len)) return false;
+    u64 basePathLen = fullPath.count;
+    for (cstr f: files) if (!Visit(f, visitProc, &fullPath, &basePathLen)) return false;
     
     return true;
 }
 
-#endif//WIN32/POSIX
 #endif//NCZ_NO_OS
 
 }//namespace ncz
